@@ -13,6 +13,15 @@ from app.models.base import Base
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Audit Coworker backend...")
+
+    # Enable WAL mode for SQLite to handle concurrency better
+    if "sqlite" in settings.DATABASE_URL:
+        async with engine.connect() as conn:
+            from sqlalchemy import text
+            await conn.execute(text("PRAGMA journal_mode=WAL;"))
+            await conn.execute(text("PRAGMA synchronous=NORMAL;")) # Optional: for performance
+            logger.info("SQLite WAL mode enabled.")
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables ensured.")

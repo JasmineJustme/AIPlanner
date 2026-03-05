@@ -52,6 +52,7 @@ class SubmitPayload(BaseModel):
 MOCK_DETAILS = {
     "orch-a1b2c3": {
         "orch_id": "orch-a1b2c3",
+        "summary": "审计2025年Q4财务报表 等3个任务",
         "status": "pending_confirm",
         "submitted_at": "2026-03-04T09:00:00",
         "todos": [
@@ -110,6 +111,7 @@ MOCK_DETAILS = {
     },
     "orch-d4e5f6": {
         "orch_id": "orch-d4e5f6",
+        "summary": "自动化生成月度合规报告",
         "status": "pending_confirm",
         "submitted_at": "2026-03-04T08:30:00",
         "todos": [
@@ -192,8 +194,13 @@ async def submit_orchestration(
         for t in todos
     ]
 
+    summary = todos[0].title
+    if len(todos) > 1:
+        summary = f"{todos[0].title} 等 {len(todos)} 个任务"
+
     entry = {
         "orch_id": orch_id,
+        "summary": summary,
         "status": "analyzing",
         "submitted_at": now,
         "todos": todo_list,
@@ -245,12 +252,23 @@ async def list_pending_orchestrations(
 ):
     items = []
     for orch_id, entry in _orchestration_store.items():
+        plan = entry.get("plan") or {}
+        rec_name = ""
+        if entry.get("suggested_agent"):
+             rec_name = entry["suggested_agent"]["name"]
+        elif entry.get("suggested_wagent"):
+             rec_name = entry["suggested_wagent"]["name"]
+        elif plan.get("recommended_name"):
+             rec_name = plan.get("recommended_name")
+
         items.append({
             "orch_id": orch_id,
+            "summary": entry.get("summary", "未命名任务"),
             "todos_count": len(entry.get("todos", [])),
             "status": entry.get("status", "pending_confirm"),
             "submitted_at": entry.get("submitted_at"),
             "error": entry.get("error"),
+            "recommended_name": rec_name,
         })
     items.sort(key=lambda x: x.get("submitted_at") or "", reverse=True)
     return {

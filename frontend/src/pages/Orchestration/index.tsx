@@ -16,10 +16,11 @@ import {
   Empty,
   Alert,
   message,
+  Tabs,
+  Checkbox,
 } from 'antd';
 import {
   CheckOutlined,
-  EditOutlined,
   SwapOutlined,
   CloseOutlined,
   LoadingOutlined,
@@ -50,10 +51,12 @@ const { Title, Text } = Typography;
 
 interface OrchestrationItem {
   orch_id: string;
+  summary?: string;
   todos_count?: number;
   status: string;
   submitted_at?: string;
   error?: string;
+  recommended_name?: string;
 }
 
 interface OrchestrationDetail {
@@ -87,9 +90,15 @@ const STATUS_CONFIG: Record<string, { color: string; text: string; icon: React.R
 function OrchestrationCard({
   orch,
   onRefreshList,
+  selectable,
+  checked,
+  onCheck,
 }: {
   orch: OrchestrationItem;
   onRefreshList: () => void;
+  selectable?: boolean;
+  checked?: boolean;
+  onCheck?: (checked: boolean) => void;
 }) {
   const [detail, setDetail] = useState<OrchestrationDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -252,21 +261,43 @@ function OrchestrationCard({
 
   const statusCfg = STATUS_CONFIG[orch.status] || { color: 'default', text: orch.status, icon: null };
 
+  const getHeaderName = () => {
+      // Use summary if available, otherwise orch_id
+      return orch.summary || `编排 #${orch.orch_id.slice(-6)}`;
+  };
+  const getMetaInfo = () => {
+      // Show orch_id and agent name
+      const id = orch.orch_id.slice(-6);
+      const parts = [`ID: ${id}`];
+      if (orch.recommended_name) parts.push(orch.recommended_name);
+      return parts.join(' | ');
+  };
+
   const cardHeader = (
-    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-      <Space>
-        <Text strong>编排 #{orch.orch_id.slice(-6)}</Text>
+    <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }} onClick={(e) => e.stopPropagation()}>
+       <Space style={{ flex: 1, minWidth: 0 }}>
+        {selectable && (
+             <Checkbox
+                checked={checked}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => onCheck?.(e.target.checked)}
+             />
+        )}
+        <Text strong ellipsis style={{ maxWidth: 300 }}>{getHeaderName()}</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>{getMetaInfo()}</Text>
         <Tag>{orch.todos_count ?? 0} 个任务</Tag>
         <Tag icon={statusCfg.icon} color={statusCfg.color}>
           {statusCfg.text}
         </Tag>
+      </Space>
+      <Space>
         {orch.submitted_at && (
           <Text type="secondary" style={{ fontSize: 12 }}>
             {new Date(orch.submitted_at).toLocaleString()}
           </Text>
         )}
       </Space>
-    </Space>
+    </div>
   );
 
   if (orch.status === 'analyzing') {
@@ -517,6 +548,7 @@ function OrchestrationCard({
 export default function OrchestrationPage() {
   const [loading, setLoading] = useState(true);
   const [orchestrations, setOrchestrations] = useState<OrchestrationItem[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const { on, off } = useSSE();
   const loadPendingRef = useRef<() => Promise<void>>();
 
@@ -527,6 +559,7 @@ export default function OrchestrationPage() {
       const data = (res as { data: { data?: OrchestrationItem[] } }).data;
       const list = (data?.data ?? data) as OrchestrationItem[] | undefined;
       setOrchestrations(Array.isArray(list) ? list : []);
+      setSelectedIds(new Set()); // Reset selection on reload
     } catch {
       setOrchestrations([]);
     } finally {
@@ -544,6 +577,75 @@ export default function OrchestrationPage() {
     on('orchestration_complete', handler);
     return () => off('orchestration_complete', handler);
   }, [on, off]);
+
+  const handleBatchConfirm = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+        const promises = Array.from(selectedIds).map(id => confirmOrchestration(id));
+        await Promise.all(promises);
+        message.success(`已批量确认 ${selectedIds.size} 个任务`);
+        loadPending(); // Refresh list will clear selection
+    } catch {
+        message.error("批量确认失败，请重试");
+    }
+  };
+
+  const toggleSelect = (id: string, checked: boolean) => {
+      const newSet = new Set(selectedIds);
+      if (checked) newSet.add(id);
+      else newSet.delete(id);
+      setSelectedIds(newSet);
+  };
+
+  const renderList = (status: string) => {
+      const items = status === 'all'
+        ? orchestrations
+        : orchestrations.filter(o => o.status === status);
+
+      if (items.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无任务" />;
+
+      const isPending = status === 'pending_confirm';
+
+      return (
+        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+             {isPending && items.length > 0 && (
+                <div style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
+                    <Button
+                        size="small"
+                        onClick={() => {
+                            if (selectedIds.size === items.length) {
+                                setSelectedIds(new Set());
+                            } else {
+                                setSelectedIds(new Set(items.map(i => i.orch_id)));
+                            }
+                        }}
+                    >
+                        {selectedIds.size === items.length && items.length > 0 ? '取消全选' : '全选'}
+                    </Button>
+                    <Button
+                        type="primary"
+                        size="small"
+                        disabled={selectedIds.size === 0}
+                        onClick={handleBatchConfirm}
+                    >
+                        批量执行 ({selectedIds.size})
+                    </Button>
+                </div>
+             )}
+            {items.map((orch) => (
+            <OrchestrationCard
+                key={orch.orch_id}
+                orch={orch}
+                onRefreshList={loadPending}
+                selectable={isPending}
+                checked={isPending ? selectedIds.has(orch.orch_id) : false}
+                onCheck={(c) => toggleSelect(orch.orch_id, c)}
+            />
+            ))}
+        </Space>
+      );
+  };
+
 
   if (loading) {
     return (
@@ -568,21 +670,22 @@ export default function OrchestrationPage() {
     );
   }
 
+  const items = [
+      { key: 'all', label: '全部', children: renderList('all') },
+      { key: 'analyzing', label: '分析中', children: renderList('analyzing') },
+      { key: 'pending_confirm', label: '待确认', children: renderList('pending_confirm') },
+      { key: 'confirmed', label: '执行中', children: renderList('confirmed') }, // mapped confirm to "Executing" concept usually
+      { key: 'failed', label: '失败', children: renderList('failed') },
+      { key: 'cancelled', label: '已取消', children: renderList('cancelled') },
+  ];
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>智能编排</Title>
         <Button onClick={loadPending}>刷新</Button>
       </div>
-      <Space direction="vertical" style={{ width: '100%' }} size="middle">
-        {orchestrations.map((orch) => (
-          <OrchestrationCard
-            key={orch.orch_id}
-            orch={orch}
-            onRefreshList={loadPending}
-          />
-        ))}
-      </Space>
+      <Tabs defaultActiveKey="pending_confirm" items={items} />
     </div>
   );
 }
