@@ -84,6 +84,11 @@ class SchedulerEngine:
                 breaker_id = str(task.agent_id or task.wagent_id or "")
                 if breaker_id:
                     self._circuit_breaker[breaker_id] = 0
+                if task.orchestration_id:
+                    from app.api.orchestration import sync_todos_for_orchestration, update_orchestration_status
+
+                    if update_orchestration_status(task.orchestration_id, "completed"):
+                        await sync_todos_for_orchestration(db, task.orchestration_id)
                 await sse_manager.broadcast("task.status_changed", {"task_id": task.id, "status": "completed"})
             else:
                 await self._handle_failure(db, task)

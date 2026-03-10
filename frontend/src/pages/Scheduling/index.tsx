@@ -415,15 +415,25 @@ export default function SchedulingPage() {
                       {record.execution_log && (
                         <div style={{ marginBottom: 12 }}>
                           <strong>执行日志：</strong>
-                          <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, fontSize: 12 }}>
-                            {record.execution_log}
-                          </pre>
+                          <JsonViewer data={record.execution_log} />
                         </div>
                       )}
                       {record.error_message && (
                         <div>
                           <strong>错误信息：</strong>
-                          <pre style={{ background: '#fff2f0', padding: 12, borderRadius: 4, fontSize: 12, color: '#cf1322' }}>
+                          <pre
+                            style={{
+                              background: '#fff2f0',
+                              padding: 12,
+                              borderRadius: 4,
+                              fontSize: 12,
+                              color: '#cf1322',
+                              margin: 0,
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              overflowWrap: 'anywhere',
+                            }}
+                          >
                             {record.error_message}
                           </pre>
                         </div>
