@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.engine.orchestrator import orchestrator
-from app.models import Todo
+from app.models import Todo, SchedulePlan, ScheduleTask
 from loguru import logger
 
 router = APIRouter(prefix="/orchestration", tags=["orchestration"])
@@ -227,6 +227,83 @@ async def sync_todos_for_orchestration(db: AsyncSession, orch_id: str, entry: di
     await db.flush()
 
 
+def _normalize_plan_time_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    else:
+        parsed = parsed.replace(microsecond=0)
+    return parsed.replace(microsecond=0).isoformat()
+
+
+def _parse_schedule_datetime(value: str | None) -> datetime:
+    normalized = _normalize_plan_time_value(value)
+    if not normalized:
+        return datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    try:
+        return datetime.fromisoformat(normalized).replace(microsecond=0)
+    except ValueError:
+        return datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+
+
+async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entry: dict) -> None:
+    plan_data = entry.get("plan") or {}
+    existing_task_result = await db.execute(
+        select(ScheduleTask).where(ScheduleTask.orchestration_id == orch_id)
+    )
+    schedule_task = existing_task_result.scalar_one_or_none()
+
+    schedule_plan = None
+    if schedule_task:
+        schedule_plan = await db.get(SchedulePlan, schedule_task.plan_id)
+
+    if schedule_plan is None:
+        schedule_plan = SchedulePlan(
+            name=entry.get("summary") or f"编排任务 {orch_id}",
+            status="active",
+            is_recurring=False,
+        )
+        db.add(schedule_plan)
+        await db.flush()
+
+    recommended_id = plan_data.get("recommended_id")
+    plan_type = plan_data.get("plan_type")
+    agent_id = recommended_id if plan_type == "agent" and recommended_id else None
+    wagent_id = recommended_id if plan_type in ("wagent", "new_wagent") and recommended_id else None
+    scheduled_at = _parse_schedule_datetime(plan_data.get("start_time"))
+
+    if schedule_task is None:
+        schedule_task = ScheduleTask(
+            plan_id=schedule_plan.id,
+            orchestration_id=orch_id,
+            agent_id=agent_id,
+            wagent_id=wagent_id,
+            status="pending",
+            priority=plan_data.get("priority") or "medium",
+            scheduled_at=scheduled_at,
+            input_params=plan_data.get("input_params") or {},
+        )
+        db.add(schedule_task)
+    else:
+        schedule_task.plan_id = schedule_plan.id
+        schedule_task.agent_id = agent_id
+        schedule_task.wagent_id = wagent_id
+        schedule_task.status = "pending"
+        schedule_task.priority = plan_data.get("priority") or schedule_task.priority or "medium"
+        schedule_task.scheduled_at = scheduled_at
+        schedule_task.input_params = plan_data.get("input_params") or {}
+        schedule_task.error_message = None
+
+    schedule_plan.name = entry.get("summary") or schedule_plan.name
+    schedule_plan.status = "active"
+    await db.flush()
+
+
 @router.post("/submit")
 async def submit_orchestration(
     payload: SubmitPayload,
@@ -378,9 +455,10 @@ async def confirm_orchestration(
         plan["input_params"] = payload.get("input_params", plan.get("input_params"))
         plan["priority"] = payload.get("priority", plan.get("priority"))
         plan["estimated_duration_minutes"] = payload.get("estimated_duration_minutes", plan.get("estimated_duration_minutes"))
-        plan["start_time"] = payload.get("start_time", plan.get("start_time"))
-        plan["deadline"] = payload.get("deadline", plan.get("deadline"))
+        plan["start_time"] = _normalize_plan_time_value(payload.get("start_time")) or plan.get("start_time")
+        plan["deadline"] = _normalize_plan_time_value(payload.get("deadline")) or plan.get("deadline")
         entry["plan"] = plan
+    await ensure_schedule_for_orchestration(db, orch_id, entry)
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
@@ -401,9 +479,10 @@ async def confirm_wagent(
         plan["input_params"] = payload.get("input_params", plan.get("input_params"))
         plan["priority"] = payload.get("priority", plan.get("priority"))
         plan["estimated_duration_minutes"] = payload.get("estimated_duration_minutes", plan.get("estimated_duration_minutes"))
-        plan["start_time"] = payload.get("start_time", plan.get("start_time"))
-        plan["deadline"] = payload.get("deadline", plan.get("deadline"))
+        plan["start_time"] = _normalize_plan_time_value(payload.get("start_time")) or plan.get("start_time")
+        plan["deadline"] = _normalize_plan_time_value(payload.get("deadline")) or plan.get("deadline")
         entry["plan"] = plan
+    await ensure_schedule_for_orchestration(db, orch_id, entry)
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
@@ -444,9 +523,9 @@ async def modify_params(
     if "estimated_duration_minutes" in payload:
         plan["estimated_duration_minutes"] = payload["estimated_duration_minutes"]
     if "start_time" in payload:
-        plan["start_time"] = payload["start_time"]
+        plan["start_time"] = _normalize_plan_time_value(payload["start_time"])
     if "deadline" in payload:
-        plan["deadline"] = payload["deadline"]
+        plan["deadline"] = _normalize_plan_time_value(payload["deadline"])
     entry["plan"] = plan
     _save_store()
     return {"code": 200, "message": "success", "data": entry}
@@ -474,8 +553,8 @@ async def retry_orchestration(
     entry = _orchestration_store.get(orch_id)
     if not entry:
         raise HTTPException(status_code=404, detail="编排不存在")
-    if entry["status"] not in ("failed", "cancelled"):
-        raise HTTPException(status_code=400, detail="仅失败或已取消的编排可以重试")
+    if entry["status"] not in ("pending_confirm", "failed", "cancelled"):
+        raise HTTPException(status_code=400, detail="仅待确认、失败或已取消的编排可以重新编排")
 
     todo_ids = [t["id"] for t in entry.get("todos", [])]
     if not todo_ids:

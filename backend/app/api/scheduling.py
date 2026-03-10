@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +7,10 @@ from app.database import get_db
 from app.models import ScheduleTask, SchedulePlan, Agent, WAgent
 
 router = APIRouter(prefix="/scheduling", tags=["scheduling"])
+
+
+def _now_local_naive() -> datetime:
+    return datetime.now().replace(microsecond=0)
 
 
 def _task_to_dict(t: ScheduleTask, agent_name: str | None = None, plan_name: str | None = None) -> dict:
@@ -226,12 +231,12 @@ async def delay_task(
     payload: dict = Body(default={"minutes": 30}),
     db: AsyncSession = Depends(get_db),
 ):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     task = await db.get(ScheduleTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     minutes = payload.get("minutes", 30)
-    task.scheduled_at = datetime.utcnow() + timedelta(minutes=minutes)
+    task.scheduled_at = _now_local_naive() + timedelta(minutes=minutes)
     task.status = "pending"
     task.confirm_action = "delayed"
     task.confirm_deadline = None
@@ -296,8 +301,9 @@ async def retry_task(
     task.status = "pending"
     task.retry_count = 0
     task.error_message = None
-    from datetime import datetime
-    task.scheduled_at = datetime.utcnow()
+    task.started_at = None
+    task.completed_at = None
+    task.scheduled_at = _now_local_naive()
     await db.flush()
     return {"code": 200, "message": "success", "data": {"status": "retrying"}}
 

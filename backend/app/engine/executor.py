@@ -1,33 +1,63 @@
-from sqlalchemy.ext.asyncio import AsyncSession
+import json
+from datetime import datetime
+
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models import Agent, WAgent
-from app.models.wagent import WAgentVersion
-from app.models.schedule import ScheduleTask
 from app.models.execution import ExecutionHistory
+from app.models.schedule import ScheduleTask
+from app.models.wagent import WAgentVersion
 from app.services.dify_client import dify_client
 from loguru import logger
-from datetime import datetime
+
+
+def _now_local_naive() -> datetime:
+    return datetime.now().replace(microsecond=0)
 
 
 class Executor:
+    def _build_execution_log(self, *, task: ScheduleTask, target_type: str, target_name: str | None, status: str, payload=None, error: str | None = None) -> str:
+        content = {
+            "task_id": task.id,
+            "target_type": target_type,
+            "target_name": target_name,
+            "status": status,
+            "input_params": task.input_params or {},
+            "output_result": payload,
+            "error_message": error,
+            "logged_at": _now_local_naive().isoformat(),
+        }
+        return json.dumps(content, ensure_ascii=False, default=str)
+
     async def execute_agent(self, db: AsyncSession, task: ScheduleTask) -> ExecutionHistory:
         """Execute a single Agent task"""
         agent = await db.get(Agent, task.agent_id)
         if not agent:
             return await self._record_failure(db, task, "Agent not found")
 
-        started_at = datetime.utcnow()
+        started_at = _now_local_naive()
         try:
             result = await dify_client.call_agent(
                 agent.dify_endpoint, agent.dify_api_key,
                 task.input_params or {}, agent.timeout_seconds
             )
-            completed_at = datetime.utcnow()
+            completed_at = _now_local_naive()
             duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+            execution_log = self._build_execution_log(
+                task=task,
+                target_type="agent",
+                target_name=agent.name,
+                status="completed",
+                payload=result,
+            )
 
             task.status = "completed"
             task.output_result = result
             task.completed_at = completed_at
+            task.execution_log = execution_log
+
+            logger.info("Agent execution completed for task_id={} agent='{}': {}", task.id, agent.name, execution_log)
 
             agent.call_count += 1
             agent.success_count += 1
@@ -35,7 +65,7 @@ class Executor:
             history = ExecutionHistory(
                 task_id=task.id, agent_id=agent.id, agent_name=agent.name,
                 status="completed", input_params=task.input_params,
-                output_result=result, duration_ms=duration_ms,
+                output_result=result, execution_log=execution_log, duration_ms=duration_ms,
                 started_at=started_at, completed_at=completed_at,
             )
             db.add(history)
@@ -59,7 +89,7 @@ class Executor:
         if not version or not version.steps:
             return await self._record_failure(db, task, "W-Agent version or steps not found", wagent=wagent)
 
-        started_at = datetime.utcnow()
+        started_at = _now_local_naive()
         step_outputs = {}
         try:
             from app.models.workflow import Workflow
@@ -76,12 +106,22 @@ class Executor:
                 )
                 step_outputs[step.get("order", 0)] = result
 
-            completed_at = datetime.utcnow()
+            completed_at = _now_local_naive()
             duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+            execution_log = self._build_execution_log(
+                task=task,
+                target_type="wagent",
+                target_name=wagent.name,
+                status="completed",
+                payload=step_outputs,
+            )
 
             task.status = "completed"
             task.output_result = step_outputs
             task.completed_at = completed_at
+            task.execution_log = execution_log
+
+            logger.info("W-Agent execution completed for task_id={} wagent='{}': {}", task.id, wagent.name, execution_log)
 
             wagent.call_count += 1
             wagent.success_count += 1
@@ -89,7 +129,7 @@ class Executor:
             history = ExecutionHistory(
                 task_id=task.id, wagent_id=wagent.id, agent_name=wagent.name,
                 status="completed", input_params=task.input_params,
-                output_result=step_outputs, duration_ms=duration_ms,
+                output_result=step_outputs, execution_log=execution_log, duration_ms=duration_ms,
                 started_at=started_at, completed_at=completed_at,
             )
             db.add(history)
@@ -125,13 +165,22 @@ class Executor:
         wagent=None,
     ) -> ExecutionHistory:
         if not started_at:
-            started_at = datetime.utcnow()
-        completed_at = datetime.utcnow()
+            started_at = _now_local_naive()
+        completed_at = _now_local_naive()
         duration_ms = int((completed_at - started_at).total_seconds() * 1000)
 
         task.status = "failed"
         task.error_message = error
         task.completed_at = completed_at
+        task.execution_log = self._build_execution_log(
+            task=task,
+            target_type="agent" if task.agent_id else "wagent" if task.wagent_id else "unknown",
+            target_name=getattr(agent or wagent, "name", None),
+            status="failed",
+            error=error,
+        )
+
+        logger.error("Execution failed for task_id={}: {}", task.id, task.execution_log)
 
         entity = agent or wagent
         if entity:
@@ -151,6 +200,7 @@ class Executor:
             status="failed",
             input_params=task.input_params,
             error_message=error,
+            execution_log=task.execution_log,
             duration_ms=duration_ms,
             started_at=started_at,
             completed_at=completed_at,

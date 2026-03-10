@@ -6,12 +6,31 @@ class DifyClient:
     def __init__(self):
         self._client = httpx.AsyncClient(timeout=300)
 
+    @staticmethod
+    def _derive_workflow_run_url(endpoint: str) -> str:
+        """Normalize user-provided Dify endpoints to the workflow run API."""
+        url = (endpoint or "").strip().rstrip("/")
+        if not url:
+            return url
+        if url.endswith("/workflows/run"):
+            return url
+        if "/v1/" in url:
+            return url.split("/v1/", 1)[0] + "/v1/workflows/run"
+        if url.endswith("/v1"):
+            return url + "/workflows/run"
+        if url.endswith("/workflows"):
+            return url + "/run"
+        if url.endswith("/run"):
+            return url[: -len("/run")] + "/workflows/run"
+        return url + "/workflows/run"
+
     async def call_agent(self, endpoint: str, api_key: str, inputs: dict, timeout: int = 300) -> dict:
-        """Call Dify Agent (Completion mode)"""
+        """Call a configured Dify workflow for Agent execution."""
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload = {"inputs": inputs, "response_mode": "blocking", "user": "audit-coworker"}
+        request_url = self._derive_workflow_run_url(endpoint)
         try:
-            response = await self._client.post(endpoint, json=payload, headers=headers, timeout=timeout)
+            response = await self._client.post(request_url, json=payload, headers=headers, timeout=timeout)
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -22,8 +41,9 @@ class DifyClient:
         """Call Dify Workflow"""
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload = {"inputs": inputs, "response_mode": "blocking", "user": "audit-coworker"}
+        request_url = self._derive_workflow_run_url(endpoint)
         try:
-            response = await self._client.post(endpoint, json=payload, headers=headers, timeout=timeout)
+            response = await self._client.post(request_url, json=payload, headers=headers, timeout=timeout)
             response.raise_for_status()
             return response.json()
         except Exception as e:

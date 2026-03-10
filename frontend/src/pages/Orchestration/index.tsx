@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Card,
   Spin,
@@ -47,6 +48,7 @@ import type { Agent } from '@/types/agent';
 import type { WAgent } from '@/types/wagent';
 import type { Todo } from '@/types/todo';
 import { PRIORITY_MAP } from '@/constants/status';
+import { ROUTES } from '@/constants/routes';
 
 const { Title, Text } = Typography;
 
@@ -93,12 +95,14 @@ const STATUS_CONFIG: Record<string, { color: string; text: string; icon: React.R
 function OrchestrationCard({
   orch,
   onRefreshList,
+  onConfirmed,
   selectable,
   checked,
   onCheck,
 }: {
   orch: OrchestrationItem;
   onRefreshList: () => void;
+  onConfirmed?: () => void;
   selectable?: boolean;
   checked?: boolean;
   onCheck?: (checked: boolean) => void;
@@ -186,6 +190,7 @@ function OrchestrationCard({
       }
       message.success('已确认执行');
       onRefreshList();
+      onConfirmed?.();
     } catch (e) {
       message.error((e as Error).message || '确认失败');
     }
@@ -271,6 +276,17 @@ function OrchestrationCard({
   const getReason = () => {
     if (!detail) return '';
     return detail.llm_reason || detail.plan?.reason || '';
+  };
+
+  const getExecutorLabel = () => {
+    const planType = getPlanType();
+    return planType === 'agent' ? 'Agent' : 'W-Agent';
+  };
+
+  const formatPlanTime = (value?: string | null) => {
+    if (!value) return '未设置';
+    const parsed = dayjs(value);
+    return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : value;
   };
 
   const statusCfg = STATUS_CONFIG[orch.status] || { color: 'default', text: orch.status, icon: null };
@@ -363,6 +379,16 @@ function OrchestrationCard({
     return (
       <Card size="small" style={{ borderLeft: '3px solid #d9d9d9', opacity: 0.7 }}>
         {cardHeader}
+        <Space style={{ marginTop: 12 }}>
+          <Button
+            type="primary"
+            icon={<ReloadOutlined />}
+            loading={retrying}
+            onClick={handleRetry}
+          >
+            重新编排
+          </Button>
+        </Space>
       </Card>
     );
   }
@@ -387,6 +413,15 @@ function OrchestrationCard({
                 <div style={{ marginBottom: 12 }}>
                   <Text strong>执行者：</Text>
                   <Tag color="green" style={{ marginLeft: 8 }}>{getRecommendedName()}</Tag>
+                  <Text type="secondary" style={{ marginLeft: 8 }}>({getExecutorLabel()})</Text>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <Text strong>开始时间：</Text>
+                  <Text style={{ marginLeft: 8 }}>{formatPlanTime(detail.plan?.start_time)}</Text>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <Text strong>截止时间：</Text>
+                  <Text style={{ marginLeft: 8 }}>{formatPlanTime(detail.plan?.deadline)}</Text>
                 </div>
                 <ReasonCollapse reason={getReason()} />
               </div>
@@ -424,11 +459,24 @@ function OrchestrationCard({
                 <Tag color="blue" style={{ marginLeft: 8 }}>
                   {getRecommendedName()}
                 </Tag>
+                <Text type="secondary" style={{ marginLeft: 8 }}>
+                  ({getExecutorLabel()})
+                </Text>
                 {getPlanType() === 'new_wagent' && (
                   <Text type="secondary" style={{ marginLeft: 8 }}>
                     (新 W-Agent 编排)
                   </Text>
                 )}
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <Text strong>开始时间：</Text>
+                <Text style={{ marginLeft: 8 }}>{formatPlanTime(detail.plan?.start_time)}</Text>
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <Text strong>截止时间：</Text>
+                <Text style={{ marginLeft: 8 }}>{formatPlanTime(detail.plan?.deadline)}</Text>
               </div>
 
               <div style={{ marginBottom: 16 }}>
@@ -502,6 +550,13 @@ function OrchestrationCard({
                   确认执行
                 </Button>
                 <Button
+                  icon={<ReloadOutlined />}
+                  loading={retrying}
+                  onClick={handleRetry}
+                >
+                  重新编排
+                </Button>
+                <Button
                   icon={<SwapOutlined />}
                   onClick={() => setAgentModalOpen(true)}
                 >
@@ -561,6 +616,7 @@ function OrchestrationCard({
 }
 
 export default function OrchestrationPage() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [orchestrations, setOrchestrations] = useState<OrchestrationItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -593,6 +649,10 @@ export default function OrchestrationPage() {
     return () => off('orchestration_complete', handler);
   }, [on, off]);
 
+  const handleConfirmedNavigate = useCallback(() => {
+    navigate(ROUTES.SCHEDULING);
+  }, [navigate]);
+
   const handleBatchConfirm = async () => {
     if (selectedIds.size === 0) return;
     try {
@@ -600,6 +660,7 @@ export default function OrchestrationPage() {
         await Promise.all(promises);
         message.success(`已批量确认 ${selectedIds.size} 个任务`);
         loadPending(); // Refresh list will clear selection
+        handleConfirmedNavigate();
     } catch {
         message.error("批量确认失败，请重试");
     }
@@ -656,6 +717,7 @@ export default function OrchestrationPage() {
                 key={orch.orch_id}
                 orch={orch}
                 onRefreshList={loadPending}
+                onConfirmed={handleConfirmedNavigate}
                 selectable={isPending}
                 checked={isPending ? selectedIds.has(orch.orch_id) : false}
                 onCheck={(c) => toggleSelect(orch.orch_id, c)}

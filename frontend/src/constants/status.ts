@@ -1,17 +1,18 @@
-export enum TaskStatus {
-  PendingConfirm = 'pending_confirm',
-  Pending = 'pending',
-  Confirming = 'confirming',
-  Running = 'running',
-  Completed = 'completed',
-  Failed = 'failed',
-  Skipped = 'skipped',
-  Blocked = 'blocked',
-  Paused = 'paused',
-  Delayed = 'delayed',
-  Retrying = 'retrying',
-  Archived = 'archived',
-}
+export const TaskStatus = {
+  PendingConfirm: 'pending_confirm',
+  Pending: 'pending',
+  Confirming: 'confirming',
+  Running: 'running',
+  Completed: 'completed',
+  Failed: 'failed',
+  Skipped: 'skipped',
+  Blocked: 'blocked',
+  Paused: 'paused',
+  Delayed: 'delayed',
+  Retrying: 'retrying',
+  Archived: 'archived',
+} as const;
+export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
 export const STATUS_TAG_MAP: Record<string, { color: string; text: string }> = {
   [TaskStatus.PendingConfirm]: { color: 'blue', text: '待确认' },
@@ -28,27 +29,29 @@ export const STATUS_TAG_MAP: Record<string, { color: string; text: string }> = {
   [TaskStatus.Archived]: { color: 'default', text: '已归档' },
 };
 
-export enum TodoStatus {
-  PendingConfirm = 'pending_confirm',
-  Orchestrating = 'orchestrating',
-  Scheduling = 'scheduling',
-  Completed = 'completed',
-  Pending = 'pending', // Keeping for backward compatibility if needed, or migration
-}
+export const TodoStatus = {
+  PendingConfirm: 'pending_confirm',
+  Orchestrating: 'orchestrating',
+  Scheduling: 'scheduling',
+  Completed: 'completed',
+  Pending: 'pending',
+} as const;
+export type TodoStatus = (typeof TodoStatus)[keyof typeof TodoStatus];
 
 export const TODO_STATUS_MAP: Record<string, { color: string; text: string }> = {
   [TodoStatus.PendingConfirm]: { color: 'blue', text: '待确认' },
   [TodoStatus.Orchestrating]: { color: 'cyan', text: '编排中' },
   [TodoStatus.Scheduling]: { color: 'orange', text: '调度中' },
   [TodoStatus.Completed]: { color: 'success', text: '已完成' },
-  [TodoStatus.Pending]: { color: 'default', text: '待处理' }, // Fallback
+  [TodoStatus.Pending]: { color: 'default', text: '待处理' },
 };
 
-export enum Priority {
-  High = 'high',
-  Medium = 'medium',
-  Low = 'low',
-}
+export const Priority = {
+  High: 'high',
+  Medium: 'medium',
+  Low: 'low',
+} as const;
+export type Priority = (typeof Priority)[keyof typeof Priority];
 
 export const PRIORITY_MAP: Record<string, { color: string; text: string }> = {
   [Priority.High]: { color: '#ff4d4f', text: '高' },
@@ -56,12 +59,13 @@ export const PRIORITY_MAP: Record<string, { color: string; text: string }> = {
   [Priority.Low]: { color: '#52c41a', text: '低' },
 };
 
-export enum TodoSource {
-  Manual = 'manual',
-  Email = 'email',
-  Calendar = 'calendar',
-  Project = 'project',
-}
+export const TodoSource = {
+  Manual: 'manual',
+  Email: 'email',
+  Calendar: 'calendar',
+  Project: 'project',
+} as const;
+export type TodoSource = (typeof TodoSource)[keyof typeof TodoSource];
 
 export const SOURCE_MAP: Record<string, { color: string; text: string; icon: string }> = {
   [TodoSource.Manual]: { color: '#8c8c8c', text: '手动', icon: 'EditOutlined' },
@@ -70,44 +74,49 @@ export const SOURCE_MAP: Record<string, { color: string; text: string; icon: str
   [TodoSource.Project]: { color: '#fa8c16', text: '项目', icon: 'ProjectOutlined' },
 };
 
-export enum ReviewStatus {
-  PendingReview = 'pending_review',
-  Confirmed = 'confirmed',
-  Rejected = 'rejected',
-}
+export const ReviewStatus = {
+  PendingReview: 'pending_review',
+  Confirmed: 'confirmed',
+  Rejected: 'rejected',
+} as const;
+export type ReviewStatus = (typeof ReviewStatus)[keyof typeof ReviewStatus];
 
-export enum OrchestrationStatus {
-  Analyzing = 'analyzing',
-  PendingConfirm = 'pending_confirm',
-  Confirmed = 'confirmed',
-  Cancelled = 'cancelled',
-  Failed = 'failed',
-}
+export const OrchestrationStatus = {
+  Analyzing: 'analyzing',
+  PendingConfirm: 'pending_confirm',
+  Confirmed: 'confirmed',
+  Cancelled: 'cancelled',
+  Failed: 'failed',
+} as const;
+export type OrchestrationStatus = (typeof OrchestrationStatus)[keyof typeof OrchestrationStatus];
 
-export enum SchedulePlanStatus {
-  Active = 'active',
-  Paused = 'paused',
-  Completed = 'completed',
-  Cancelled = 'cancelled',
-}
+export const SchedulePlanStatus = {
+  Active: 'active',
+  Paused: 'paused',
+  Completed: 'completed',
+  Cancelled: 'cancelled',
+} as const;
+export type SchedulePlanStatus = (typeof SchedulePlanStatus)[keyof typeof SchedulePlanStatus];
 
-export enum MessageType {
-  ReviewNew = 'review_new',
-  OrchestrationConfirm = 'orchestration_confirm',
-  TaskConfirm = 'task_confirm',
-  TaskCompleted = 'task_completed',
-  TaskFailed = 'task_failed',
-  PlanChanged = 'plan_changed',
-  SyncCompleted = 'sync_completed',
-  SyncFailed = 'sync_failed',
-  DeadlineWarning = 'deadline_warning',
-  RecurringTrigger = 'recurring_trigger',
-  CircuitBreaker = 'circuit_breaker',
-  SystemAlert = 'system_alert',
-}
+export const MessageType = {
+  ReviewNew: 'review_new',
+  OrchestrationConfirm: 'orchestration_confirm',
+  TaskConfirm: 'task_confirm',
+  TaskCompleted: 'task_completed',
+  TaskFailed: 'task_failed',
+  PlanChanged: 'plan_changed',
+  SyncCompleted: 'sync_completed',
+  SyncFailed: 'sync_failed',
+  DeadlineWarning: 'deadline_warning',
+  RecurringTrigger: 'recurring_trigger',
+  CircuitBreaker: 'circuit_breaker',
+  SystemAlert: 'system_alert',
+} as const;
+export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 
-export enum MessageStatus {
-  Unread = 'unread',
-  Read = 'read',
-  Processed = 'processed',
-}
+export const MessageStatus = {
+  Unread: 'unread',
+  Read: 'read',
+  Processed: 'processed',
+} as const;
+export type MessageStatus = (typeof MessageStatus)[keyof typeof MessageStatus];

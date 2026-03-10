@@ -35,6 +35,7 @@ class Orchestrator:
             return self._create_mock_plan(todos, agents, wagents, workflows)
 
         # 4. Build prompt
+        current_time = datetime.now(UTC).replace(tzinfo=None, microsecond=0).isoformat()
         todo_desc = "\n".join([
             f"- ID={t.id}; 标题={t.title}; 描述={t.description or ''}; 优先级={t.priority or 'medium'}; 截止时间={t.due_date.isoformat() if t.due_date else '无'}; 标签={json.dumps(t.tags or [], ensure_ascii=False)}; 项目={t.project or '无'}"
             for t in todos
@@ -54,6 +55,9 @@ class Orchestrator:
 
         default_prompt = f"""
 分析以下待办任务，从可用的Agent、W-Agent和Workflow中选择最佳方案来完成任务。
+
+当前时间：
+{current_time}
 
 待办任务：
 {todo_desc}
@@ -77,21 +81,22 @@ JSON 必须包含以下字段：
   "input_params": {{"参数名": "参数值"}},
   "priority": "high | medium | low",
   "estimated_duration_minutes": 30,
-  "start_time": "ISO8601 时间，例如 2026-03-09T09:00:00，无法判断可用 null",
-  "deadline": "ISO8601 时间，例如 2026-03-09T18:00:00，优先参考待办截止时间，无法判断可用 null",
+  "start_time": "ISO8601 时间，例如 2026-03-09T09:00:00，必须结合当前时间判断，无法判断可用 null",
+  "deadline": "ISO8601 时间，例如 2026-03-09T18:00:00，需结合当前时间、预计时长和待办截止时间判断，无法判断可用 null",
   "steps": [{{"order": 1, "workflow_name": "步骤名"}}]
 }}
 
 要求：
 1. 结合任务描述和候选 input_params 自动补全最合适的 input_params。
-2. 如果能推断开始时间与截止时间，请给出 start_time 与 deadline。
-3. deadline 不能晚于任务中最早的 due_date；如没有 due_date，可结合 estimated_duration_minutes 给出合理时间。
+2. 必须结合上方“当前时间”为每个任务生成 start_time 与 deadline；若任务没有明确开始时间，start_time 应不早于当前时间。
+3. deadline 不能晚于任务中最早的 due_date；如没有 due_date，请结合当前时间与 estimated_duration_minutes 给出合理 deadline。
 4. 若选择 new_wagent，请给出 steps；否则 steps 可为空数组。
 5. recommended_name 必须与 recommended_id 对应。
 """
 
         prompt = (
             llm_config.prompt_template.format(
+                current_time=current_time,
                 todos=todo_desc,
                 agents=agent_desc,
                 wagents=wagent_desc,

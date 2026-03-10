@@ -300,43 +300,53 @@ export default function SchedulingPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 180,
-      render: (_: unknown, r: ScheduleTask) => (
-        <Space size="small">
-          {r.status === 'failed' && (
-            <Button type="link" size="small" icon={<ReloadOutlined />} onClick={() => handleRetryTask(r.id)}>
-              重试
-            </Button>
-          )}
-          {(r.status === 'pending' || r.status === 'confirming') && (
-            <>
-              <Button type="link" size="small" icon={<ForwardOutlined />} onClick={() => handleSkipTask(r.id)}>
-                跳过
+      width: 220,
+      render: (_: unknown, r: ScheduleTask) => {
+        const isTerminalFailed = r.status === 'failed' && (r.retry_count ?? 0) >= (r.max_retries ?? 3);
+        return (
+          <Space size="small">
+            {r.status === 'failed' && (
+              <Button type="link" size="small" icon={<ReloadOutlined />} onClick={() => handleRetryTask(r.id)}>
+                重试
               </Button>
+            )}
+            {isTerminalFailed && (
               <Popconfirm title="确定取消？" onConfirm={() => handleCancelTask(r.id)}>
                 <Button type="link" size="small" danger icon={<CloseOutlined />}>
                   取消
                 </Button>
               </Popconfirm>
-            </>
-          )}
-          {r.status === 'running' && (
-            <Button type="link" size="small" icon={<PauseCircleOutlined />} onClick={() => handlePauseTask(r.id)}>
-              暂停
-            </Button>
-          )}
-          {r.status === 'paused' && (
-            <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => handleResumeTask(r.id)}>
-              恢复
-            </Button>
-          )}
-          {r.status !== 'completed' && r.status !== 'failed' && (
-            <Button type="link" size="small" icon={<ClockCircleOutlined />} onClick={() => handleDelayTask(r.id)}>
-              延后
-            </Button>
-          )}
-        </Space>
-      ),
+            )}
+            {(r.status === 'pending' || r.status === 'confirming') && (
+              <>
+                <Button type="link" size="small" icon={<ForwardOutlined />} onClick={() => handleSkipTask(r.id)}>
+                  跳过
+                </Button>
+                <Popconfirm title="确定取消？" onConfirm={() => handleCancelTask(r.id)}>
+                  <Button type="link" size="small" danger icon={<CloseOutlined />}>
+                    取消
+                  </Button>
+                </Popconfirm>
+              </>
+            )}
+            {r.status === 'running' && (
+              <Button type="link" size="small" icon={<PauseCircleOutlined />} onClick={() => handlePauseTask(r.id)}>
+                暂停
+              </Button>
+            )}
+            {r.status === 'paused' && (
+              <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => handleResumeTask(r.id)}>
+                恢复
+              </Button>
+            )}
+            {r.status !== 'completed' && r.status !== 'failed' && (
+              <Button type="link" size="small" icon={<ClockCircleOutlined />} onClick={() => handleDelayTask(r.id)}>
+                延后
+              </Button>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 

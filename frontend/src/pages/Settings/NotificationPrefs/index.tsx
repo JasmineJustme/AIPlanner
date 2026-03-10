@@ -56,13 +56,6 @@ interface GlobalPref {
 
 export default function SettingsNotificationPrefsPage() {
   const [prefs, setPrefs] = useState<Record<string, NotificationPrefRow>>({});
-  const [globalPref, setGlobalPref] = useState<GlobalPref>({
-    dnd_start: null,
-    dnd_end: null,
-    merge_strategy: 'none',
-    merge_window_minutes: 5,
-    deadline_advance_minutes: 60,
-  });
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [globalForm] = Form.useForm();
@@ -75,7 +68,7 @@ export default function SettingsNotificationPrefsPage() {
         getNotificationGlobal(),
       ]);
       const prefsData = (prefsRes as { data: { data?: NotificationPrefRow[] } }).data?.data ?? [];
-      const globalData = (globalRes as { data: { data?: GlobalPref } }).data?.data ?? {};
+      const globalData = ((globalRes as { data: { data?: Partial<GlobalPref> } }).data?.data ?? {}) as Partial<GlobalPref>;
 
       const prefsMap: Record<string, NotificationPrefRow> = {};
       MESSAGE_TYPES.forEach(({ key }) => {
@@ -89,13 +82,6 @@ export default function SettingsNotificationPrefsPage() {
       });
       setPrefs(prefsMap);
 
-      setGlobalPref({
-        dnd_start: globalData.dnd_start ?? null,
-        dnd_end: globalData.dnd_end ?? null,
-        merge_strategy: globalData.merge_strategy ?? 'none',
-        merge_window_minutes: globalData.merge_window_minutes ?? 5,
-        deadline_advance_minutes: globalData.deadline_advance_minutes ?? 60,
-      });
       globalForm.setFieldsValue({
         dnd_start: globalData.dnd_start ? dayjs(globalData.dnd_start, 'HH:mm') : undefined,
         dnd_end: globalData.dnd_end ? dayjs(globalData.dnd_end, 'HH:mm') : undefined,

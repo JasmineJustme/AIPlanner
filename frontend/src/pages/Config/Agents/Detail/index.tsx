@@ -35,15 +35,13 @@ export default function ConfigAgentsDetailPage() {
   const isEdit = Boolean(id && id !== 'new');
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const [fetching, setFetching] = useState(isEdit);
 
   useEffect(() => {
     if (isEdit && id) {
-      setFetching(true);
       getAgent(id)
         .then((res) => {
           const body = (res as { data: unknown }).data;
-          const agent = (body as { data?: Agent })?.data ?? body;
+          const agent = ((body as { data?: Agent })?.data ?? body) as Agent;
           if (agent) {
             form.setFieldsValue({
               name: agent.name,
@@ -59,8 +57,7 @@ export default function ConfigAgentsDetailPage() {
             });
           }
         })
-        .catch(() => message.error('加载失败'))
-        .finally(() => setFetching(false));
+        .catch(() => message.error('加载失败'));
     }
   }, [id, isEdit, form]);
 

@@ -4,7 +4,6 @@ import {
   Input,
   Select,
   Switch,
-  Space,
   Popconfirm,
 } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';

@@ -11,6 +11,10 @@ from app.services.sse_manager import sse_manager
 from loguru import logger
 
 
+def _now_local_naive() -> datetime:
+    return datetime.now().replace(microsecond=0)
+
+
 class SchedulerEngine:
     def __init__(self):
         self._circuit_breaker: dict[str, int] = {}  # agent_id -> consecutive failures
@@ -32,8 +36,8 @@ class SchedulerEngine:
         if available_slots <= 0:
             return
 
-        # Get pending tasks ready to execute
-        now = datetime.utcnow()
+        # Get due pending tasks ready to execute
+        now = _now_local_naive()
         pending_q = (
             select(ScheduleTask)
             .where(
@@ -57,24 +61,15 @@ class SchedulerEngine:
                 await sse_manager.broadcast("circuit_breaker.triggered", {"task_id": task.id})
                 continue
 
-            # Check if needs confirmation
-            needs_confirm = await self._needs_confirmation(db, task)
-            if needs_confirm:
-                task.status = "confirming"
-                task.confirm_deadline = datetime.utcnow()
-                await db.flush()
-                await sse_manager.broadcast("task.confirm_required", {
-                    "task_id": task.id,
-                    "task_name": f"Task {task.id[:8]}",
-                })
-                continue
-
-            # Execute
+            # Execute immediately once scheduled time is reached
             await self._execute_task(db, task)
 
     async def _execute_task(self, db: AsyncSession, task: ScheduleTask) -> None:
         task.status = "running"
-        task.started_at = datetime.utcnow()
+        if task.started_at is None:
+            task.started_at = _now_local_naive()
+        task.completed_at = None
+        task.error_message = None
         await db.flush()
 
         await sse_manager.broadcast("task.status_changed", {"task_id": task.id, "status": "running"})
@@ -106,10 +101,13 @@ class SchedulerEngine:
             task.status = "retrying"
             # Exponential backoff
             delay_minutes = math.pow(2, task.retry_count - 1)
-            task.scheduled_at = datetime.utcnow() + timedelta(minutes=delay_minutes)
+            task.scheduled_at = _now_local_naive() + timedelta(minutes=delay_minutes)
             task.status = "pending"
+            task.completed_at = None
         else:
             task.status = "failed"
+            if task.completed_at is None:
+                task.completed_at = _now_local_naive()
 
         await db.flush()
         await sse_manager.broadcast("task.status_changed", {"task_id": task.id, "status": task.status})
@@ -128,15 +126,7 @@ class SchedulerEngine:
         return True
 
     async def _needs_confirmation(self, db: AsyncSession, task: ScheduleTask) -> bool:
-        if task.agent_id:
-            from app.models.agent import Agent
-            agent = await db.get(Agent, task.agent_id)
-            return agent.confirm_before_exec if agent else True
-        if task.wagent_id:
-            from app.models.wagent import WAgent
-            wagent = await db.get(WAgent, task.wagent_id)
-            return wagent.confirm_before_exec if wagent else True
-        return True
+        return False
 
     async def _in_time_window(self, db: AsyncSession) -> bool:
         # Simplified: always allow for now
