@@ -29,19 +29,19 @@ export const STATUS_TAG_MAP: Record<string, { color: string; text: string }> = {
 };
 
 export enum TodoStatus {
-  Pending = 'pending',
-  Confirmed = 'confirmed',
-  Processing = 'processing',
+  PendingConfirm = 'pending_confirm',
+  Orchestrating = 'orchestrating',
+  Scheduling = 'scheduling',
   Completed = 'completed',
-  Archived = 'archived',
+  Pending = 'pending', // Keeping for backward compatibility if needed, or migration
 }
 
 export const TODO_STATUS_MAP: Record<string, { color: string; text: string }> = {
-  [TodoStatus.Pending]: { color: 'default', text: '待处理' },
-  [TodoStatus.Confirmed]: { color: 'blue', text: '已确认' },
-  [TodoStatus.Processing]: { color: 'orange', text: '处理中' },
+  [TodoStatus.PendingConfirm]: { color: 'blue', text: '待确认' },
+  [TodoStatus.Orchestrating]: { color: 'cyan', text: '编排中' },
+  [TodoStatus.Scheduling]: { color: 'orange', text: '调度中' },
   [TodoStatus.Completed]: { color: 'success', text: '已完成' },
-  [TodoStatus.Archived]: { color: 'default', text: '已归档' },
+  [TodoStatus.Pending]: { color: 'default', text: '待处理' }, // Fallback
 };
 
 export enum Priority {

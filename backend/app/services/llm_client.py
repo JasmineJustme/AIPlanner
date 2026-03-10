@@ -1,3 +1,6 @@
+import re
+from urllib.parse import urlsplit, urlunsplit
+
 import httpx
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,8 +12,30 @@ class LLMClient:
     def __init__(self):
         self._client = httpx.AsyncClient(timeout=120)
 
+    def _resolve_chat_endpoint(self, api_endpoint: str | None) -> str:
+        endpoint = (api_endpoint or "").strip()
+        if not endpoint:
+            return endpoint
+
+        endpoint = endpoint.rstrip("/")
+        if endpoint.lower().endswith("/chat/completions"):
+            return endpoint
+
+        parsed = urlsplit(endpoint)
+        path = parsed.path.rstrip("/")
+        should_append_chat_path = not path or re.search(r"/v\d+$", path)
+        if not should_append_chat_path:
+            return endpoint
+
+        normalized_path = f"{path}/chat/completions" if path else "/chat/completions"
+        return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, parsed.query, parsed.fragment))
+
     async def chat(self, config: LLMConfig, messages: list[dict]) -> dict:
         """Send chat request to LLM based on provider config"""
+        endpoint = self._resolve_chat_endpoint(config.api_endpoint)
+        if endpoint != (config.api_endpoint or "").strip():
+            logger.info("Normalized LLM endpoint from '{}' to '{}'", config.api_endpoint, endpoint)
+
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
         payload = {
             "model": config.model_name,
@@ -21,7 +46,7 @@ class LLMClient:
         }
         try:
             response = await self._client.post(
-                config.api_endpoint, json=payload, headers=headers
+                endpoint, json=payload, headers=headers
             )
             response.raise_for_status()
             result = response.json()

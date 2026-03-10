@@ -8,15 +8,14 @@ import {
   Select,
   message,
   Popconfirm,
-  Card,
 } from 'antd';
 import {
   PauseCircleOutlined,
   PlayCircleOutlined,
-  StopOutlined,
   ReloadOutlined,
   CloseOutlined,
   ForwardOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import { gantt } from 'dhtmlx-gantt';
 import 'dhtmlx-gantt/codebase/dhtmlxgantt.css';
@@ -24,12 +23,12 @@ import {
   getScheduleTasks,
   getGanttData,
   getSchedulePlans,
-  pausePlan,
-  resumePlan,
-  cancelPlan,
   retryTask,
   skipTask,
   cancelTask,
+  pauseTask,
+  resumeTask,
+  delayTask,
 } from '@/api/scheduling';
 import type { ScheduleTask, SchedulePlan } from '@/types/schedule';
 import type { APIResponse } from '@/api/client';
@@ -78,8 +77,8 @@ function GanttView({ tasks }: { tasks: Array<{ id: string; name: string; start: 
         { name: 'text', label: '任务', width: 200, tree: true },
         { name: 'status', label: '状态', width: 80 },
       ];
-      gantt.templates.task_class = (_start: Date, _end: Date, task: { status?: string }) => {
-        const status = task?.status || '';
+      gantt.templates.task_class = (_start: Date, _end: Date, task: unknown) => {
+        const status = (task as { status?: string })?.status || '';
         if (status === 'completed') return 'gantt_completed';
         if (status === 'failed') return 'gantt_failed';
         if (status === 'running') return 'gantt_running';
@@ -148,7 +147,7 @@ export default function SchedulingPage() {
       const res = await getGanttData(params);
       const body = res.data as APIResponse<{ tasks: Array<{ id: string; name: string; start: string; end: string; status: string }> }>;
       const data = body?.data ?? (res.data as unknown);
-      const taskList = (data as { tasks?: unknown[] })?.tasks ?? [];
+      const taskList = (data as { tasks?: Array<{ id: string; name: string; start: string; end: string; status: string }> })?.tasks ?? [];
       setGanttTasks(Array.isArray(taskList) ? taskList : []);
     } catch {
       setGanttTasks([]);
@@ -182,39 +181,6 @@ export default function SchedulingPage() {
     return () => sseManager.off('task.status_changed', handler);
   }, [loadTasks, loadGantt]);
 
-  const handlePausePlan = async (planId: string) => {
-    try {
-      await pausePlan(planId);
-      message.success('计划已暂停');
-      loadPlans();
-      loadTasks();
-    } catch {
-      message.error('操作失败');
-    }
-  };
-
-  const handleResumePlan = async (planId: string) => {
-    try {
-      await resumePlan(planId);
-      message.success('计划已恢复');
-      loadPlans();
-      loadTasks();
-    } catch {
-      message.error('操作失败');
-    }
-  };
-
-  const handleCancelPlan = async (planId: string) => {
-    try {
-      await cancelPlan(planId);
-      message.success('计划已取消');
-      loadPlans();
-      loadTasks();
-    } catch {
-      message.error('操作失败');
-    }
-  };
-
   const handleRetryTask = async (taskId: string) => {
     try {
       await retryTask(taskId);
@@ -240,7 +206,40 @@ export default function SchedulingPage() {
   const handleCancelTask = async (taskId: string) => {
     try {
       await cancelTask(taskId);
-      message.success('已取消');
+      message.success('已取消，任务已返回待确认列表');
+      loadTasks();
+      loadGantt();
+    } catch {
+      message.error('操作失败');
+    }
+  };
+
+  const handlePauseTask = async (taskId: string) => {
+    try {
+      await pauseTask(taskId);
+      message.success('已暂停');
+      loadTasks();
+      loadGantt();
+    } catch {
+      message.error('操作失败');
+    }
+  };
+
+  const handleResumeTask = async (taskId: string) => {
+    try {
+      await resumeTask(taskId);
+      message.success('已恢复');
+      loadTasks();
+      loadGantt();
+    } catch {
+      message.error('操作失败');
+    }
+  };
+
+  const handleDelayTask = async (taskId: string) => {
+    try {
+      await delayTask(taskId, { minutes: 30 });
+      message.success('已延后 30 分钟');
       loadTasks();
       loadGantt();
     } catch {
@@ -321,6 +320,21 @@ export default function SchedulingPage() {
               </Popconfirm>
             </>
           )}
+          {r.status === 'running' && (
+            <Button type="link" size="small" icon={<PauseCircleOutlined />} onClick={() => handlePauseTask(r.id)}>
+              暂停
+            </Button>
+          )}
+          {r.status === 'paused' && (
+            <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => handleResumeTask(r.id)}>
+              恢复
+            </Button>
+          )}
+          {r.status !== 'completed' && r.status !== 'failed' && (
+            <Button type="link" size="small" icon={<ClockCircleOutlined />} onClick={() => handleDelayTask(r.id)}>
+              延后
+            </Button>
+          )}
         </Space>
       ),
     },
@@ -351,22 +365,9 @@ export default function SchedulingPage() {
       </div>
 
       {activePlan && (
-        <Card size="small" style={{ marginBottom: 16 }}>
-          <Space>
-            <span>计划操作：</span>
-            <Button icon={<PauseCircleOutlined />} onClick={() => handlePausePlan(activePlan)}>
-              暂停计划
-            </Button>
-            <Button icon={<PlayCircleOutlined />} onClick={() => handleResumePlan(activePlan)}>
-              恢复计划
-            </Button>
-            <Popconfirm title="确定取消计划？" onConfirm={() => handleCancelPlan(activePlan)}>
-              <Button danger icon={<StopOutlined />}>
-                取消计划
-              </Button>
-            </Popconfirm>
-          </Space>
-        </Card>
+        <Space style={{ marginBottom: 16 }}>
+           <Typography.Text type="secondary">Plan ID: {activePlan}</Typography.Text>
+        </Space>
       )}
 
       <Tabs

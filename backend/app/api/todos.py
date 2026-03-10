@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -15,6 +15,38 @@ class BatchIdsBody(BaseModel):
 router = APIRouter(prefix="/todos", tags=["todos"])
 
 
+async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
+    from app.api.orchestration import get_orchestration_entry, map_orchestration_status_to_todo_status
+
+    result = await db.execute(
+        select(Todo).where(
+            or_(
+                Todo.orchestration_id.is_not(None),
+                Todo.status.in_(["orchestrating", "scheduling"]),
+            )
+        )
+    )
+    items = result.scalars().all()
+    changed = False
+
+    for todo in items:
+        entry = get_orchestration_entry(todo.orchestration_id or "") if todo.orchestration_id else None
+        if not entry:
+            if todo.status != "pending_confirm" or todo.orchestration_id is not None:
+                todo.status = "pending_confirm"
+                todo.orchestration_id = None
+                changed = True
+            continue
+
+        next_status = map_orchestration_status_to_todo_status(entry.get("status"))
+        if todo.status != next_status:
+            todo.status = next_status
+            changed = True
+
+    if changed:
+        await db.flush()
+
+
 @router.get("")
 async def list_todos(
     page: int = Query(1, ge=1),
@@ -24,6 +56,7 @@ async def list_todos(
     source: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
+    await _reconcile_orchestration_todo_statuses(db)
     offset = (page - 1) * size
     q = select(Todo)
     count_q = select(func.count()).select_from(Todo)

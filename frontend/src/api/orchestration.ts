@@ -9,8 +9,8 @@ export const getPendingOrchestrations = () =>
 export const getOrchestration = (orchId: string) =>
   client.get(`/orchestration/${orchId}`);
 
-export const confirmOrchestration = (orchId: string) =>
-  client.post(`/orchestration/${orchId}/confirm`);
+export const confirmOrchestration = (orchId: string, data?: Record<string, unknown>) =>
+  client.post(`/orchestration/${orchId}/confirm`, data);
 
 export const confirmWAgent = (orchId: string, data: Record<string, unknown>) =>
   client.post(`/orchestration/${orchId}/confirm-wagent`, data);

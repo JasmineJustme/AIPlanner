@@ -64,6 +64,8 @@ async def list_schedule_tasks(
     q = select(ScheduleTask).order_by(ScheduleTask.scheduled_at.desc())
     if status:
         q = q.where(ScheduleTask.status == status)
+    else:
+        q = q.where(ScheduleTask.status != "cancelled")
     if plan_id:
         q = q.where(ScheduleTask.plan_id == plan_id)
     result = await db.execute(q)
@@ -166,7 +168,7 @@ async def get_gantt_data(
     plan_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(ScheduleTask).order_by(ScheduleTask.scheduled_at)
+    q = select(ScheduleTask).where(ScheduleTask.status != "cancelled").order_by(ScheduleTask.scheduled_at)
     if plan_id:
         q = q.where(ScheduleTask.plan_id == plan_id)
     result = await db.execute(q)
@@ -263,6 +265,22 @@ async def cancel_task(
     task.status = "cancelled"
     task.confirm_action = "cancelled"
     task.confirm_deadline = None
+
+    # Update associated items if possible
+    if task.orchestration_id:
+        from app.api.orchestration import update_orchestration_status
+        # Revert orchestration to pending_confirm
+        update_orchestration_status(task.orchestration_id, "pending_confirm")
+
+        # Also find related Todos and update them to pending_confirm?
+        # Todos have orchestration_id. Update all todos with this orchestration_id.
+        from app.models import Todo
+        result = await db.execute(select(Todo).where(Todo.orchestration_id == task.orchestration_id))
+        todos = result.scalars().all()
+        for t in todos:
+            # status "pending_confirm" to match orchestration status
+            t.status = "pending_confirm"
+
     await db.flush()
     return {"code": 200, "message": "success", "data": {"status": "cancelled"}}
 
@@ -282,3 +300,29 @@ async def retry_task(
     task.scheduled_at = datetime.utcnow()
     await db.flush()
     return {"code": 200, "message": "success", "data": {"status": "retrying"}}
+
+
+@router.post("/tasks/{task_id}/pause")
+async def pause_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    task = await db.get(ScheduleTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task.status = "paused"
+    await db.flush()
+    return {"code": 200, "message": "success", "data": {"status": "paused"}}
+
+
+@router.post("/tasks/{task_id}/resume-task")
+async def resume_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    task = await db.get(ScheduleTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task.status = "pending"
+    await db.flush()
+    return {"code": 200, "message": "success", "data": {"status": "pending"}}

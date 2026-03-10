@@ -34,3 +34,9 @@ export const cancelTask = (taskId: string) =>
 
 export const retryTask = (taskId: string) =>
   client.post(`/scheduling/tasks/${taskId}/retry`);
+
+export const pauseTask = (taskId: string) =>
+  client.post(`/scheduling/tasks/${taskId}/pause`);
+
+export const resumeTask = (taskId: string) =>
+  client.post(`/scheduling/tasks/${taskId}/resume-task`);

@@ -1,14 +1,16 @@
 import json as _json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.engine.orchestrator import orchestrator
+from app.models import Todo
 from loguru import logger
 
 router = APIRouter(prefix="/orchestration", tags=["orchestration"])
@@ -161,6 +163,70 @@ if not _orchestration_store:
     _save_store()
 
 
+def update_orchestration_status(orch_id: str, status: str, error: str | None = None) -> bool:
+    if orch_id in _orchestration_store:
+        _orchestration_store[orch_id]["status"] = status
+        if error:
+            _orchestration_store[orch_id]["error"] = error
+        _save_store()
+        return True
+    return False
+
+
+def get_orchestration_entry(orch_id: str) -> dict | None:
+    return _orchestration_store.get(orch_id)
+
+
+def build_orchestration_summary(todo_items, fallback: str = "未命名任务") -> str:
+    items = list(todo_items or [])
+    if not items:
+        return fallback
+
+    def _get_text(item) -> str:
+        if isinstance(item, dict):
+            return (item.get("title") or "").strip()
+        return (getattr(item, "title", None) or "").strip()
+
+    first_text = next((_get_text(item) for item in items if _get_text(item)), "")
+    if not first_text:
+        return fallback
+    if len(items) > 1:
+        return f"{first_text} 等 {len(items)} 个任务"
+    return first_text
+
+
+def map_orchestration_status_to_todo_status(status: str | None) -> str:
+    if status in {"analyzing", "pending_confirm", "failed"}:
+        return "orchestrating"
+    if status == "confirmed":
+        return "scheduling"
+    if status == "completed":
+        return "completed"
+    return "pending_confirm"
+
+
+async def sync_todos_for_orchestration(db: AsyncSession, orch_id: str, entry: dict | None = None) -> None:
+    target_entry = entry or _orchestration_store.get(orch_id)
+    if not target_entry:
+        return
+
+    todo_ids = [item.get("id") for item in target_entry.get("todos", []) if item.get("id")]
+    if not todo_ids:
+        return
+
+    result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
+    todos = result.scalars().all()
+    orchestration_status = target_entry.get("status")
+    todo_status = map_orchestration_status_to_todo_status(orchestration_status)
+    should_clear_orchestration_id = orchestration_status == "cancelled"
+
+    for todo in todos:
+        todo.status = todo_status
+        todo.orchestration_id = None if should_clear_orchestration_id else orch_id
+
+    await db.flush()
+
+
 @router.post("/submit")
 async def submit_orchestration(
     payload: SubmitPayload,
@@ -170,10 +236,8 @@ async def submit_orchestration(
         raise HTTPException(status_code=400, detail="请至少选择一个待办任务")
 
     orch_id = f"orch-{uuid.uuid4().hex[:8]}"
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).replace(tzinfo=None).isoformat()
 
-    from sqlalchemy import select
-    from app.models import Todo
     result = await db.execute(select(Todo).where(Todo.id.in_(payload.todo_ids)))
     todos = result.scalars().all()
 
@@ -184,6 +248,7 @@ async def submit_orchestration(
         {
             "id": t.id,
             "title": t.title,
+            "description": t.description,
             "source": t.source or "manual",
             "priority": t.priority or "medium",
             "status": t.status or "pending",
@@ -194,9 +259,13 @@ async def submit_orchestration(
         for t in todos
     ]
 
-    summary = todos[0].title
-    if len(todos) > 1:
-        summary = f"{todos[0].title} 等 {len(todos)} 个任务"
+    summary = build_orchestration_summary(todos)
+
+    # Update todos status to orchestrating
+    for todo in todos:
+        todo.status = "orchestrating"
+        todo.orchestration_id = orch_id
+    await db.flush()
 
     entry = {
         "orch_id": orch_id,
@@ -238,6 +307,7 @@ async def submit_orchestration(
         entry["status"] = "failed"
         entry["error"] = f"编排分析失败: {str(e)}"
 
+    await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {
         "code": 200,
@@ -263,7 +333,7 @@ async def list_pending_orchestrations(
 
         items.append({
             "orch_id": orch_id,
-            "summary": entry.get("summary", "未命名任务"),
+            "summary": build_orchestration_summary(entry.get("todos", []), entry.get("summary", "未命名任务")),
             "todos_count": len(entry.get("todos", [])),
             "status": entry.get("status", "pending_confirm"),
             "submitted_at": entry.get("submitted_at"),
@@ -296,12 +366,22 @@ async def get_orchestration_detail(
 @router.post("/{orch_id}/confirm")
 async def confirm_orchestration(
     orch_id: str,
+    payload: dict | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     entry = _orchestration_store.get(orch_id)
     if not entry:
         raise HTTPException(status_code=404, detail="编排不存在")
     entry["status"] = "confirmed"
+    if payload:
+        plan = entry.get("plan") or {}
+        plan["input_params"] = payload.get("input_params", plan.get("input_params"))
+        plan["priority"] = payload.get("priority", plan.get("priority"))
+        plan["estimated_duration_minutes"] = payload.get("estimated_duration_minutes", plan.get("estimated_duration_minutes"))
+        plan["start_time"] = payload.get("start_time", plan.get("start_time"))
+        plan["deadline"] = payload.get("deadline", plan.get("deadline"))
+        entry["plan"] = plan
+    await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
 
@@ -321,7 +401,10 @@ async def confirm_wagent(
         plan["input_params"] = payload.get("input_params", plan.get("input_params"))
         plan["priority"] = payload.get("priority", plan.get("priority"))
         plan["estimated_duration_minutes"] = payload.get("estimated_duration_minutes", plan.get("estimated_duration_minutes"))
+        plan["start_time"] = payload.get("start_time", plan.get("start_time"))
+        plan["deadline"] = payload.get("deadline", plan.get("deadline"))
         entry["plan"] = plan
+    await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
 
@@ -360,6 +443,10 @@ async def modify_params(
         plan["priority"] = payload["priority"]
     if "estimated_duration_minutes" in payload:
         plan["estimated_duration_minutes"] = payload["estimated_duration_minutes"]
+    if "start_time" in payload:
+        plan["start_time"] = payload["start_time"]
+    if "deadline" in payload:
+        plan["deadline"] = payload["deadline"]
     entry["plan"] = plan
     _save_store()
     return {"code": 200, "message": "success", "data": entry}
@@ -374,6 +461,7 @@ async def cancel_orchestration(
     if not entry:
         raise HTTPException(status_code=404, detail="编排不存在")
     entry["status"] = "cancelled"
+    await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {"code": 200, "message": "success", "data": {"status": "cancelled"}}
 
@@ -426,6 +514,7 @@ async def retry_orchestration(
         entry["status"] = "failed"
         entry["error"] = f"重新编排失败: {str(e)}"
 
+    await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {
         "code": 200,

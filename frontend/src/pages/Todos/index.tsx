@@ -13,12 +13,15 @@ import {
   Popconfirm,
   Tag,
   Typography,
+  Descriptions,
 } from 'antd';
-import { PlusOutlined, UploadOutlined, SendOutlined } from '@ant-design/icons';
+import { PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getTodos,
   createTodo,
+  updateTodo,
   deleteTodo,
 } from '@/api/todos';
 import { submitOrchestration } from '@/api/orchestration';
@@ -28,7 +31,7 @@ import SourceTag from '@/components/SourceTag';
 import { formatDate } from '@/utils/format';
 import { parseExcelFile } from '@/utils/excel';
 import { ROUTES } from '@/constants/routes';
-import { TODO_STATUS_MAP, PRIORITY_MAP, SOURCE_MAP } from '@/constants/status';
+import { TODO_STATUS_MAP, PRIORITY_MAP, SOURCE_MAP, TodoStatus } from '@/constants/status';
 
 const { Title } = Typography;
 
@@ -49,6 +52,8 @@ export default function TodosPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
+  const [saving, setSaving] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [data, setData] = useState<{ items: Todo[]; total: number; page: number; size: number; pages: number }>({
     items: [],
@@ -57,7 +62,6 @@ export default function TodosPage() {
     size: 20,
     pages: 0,
   });
-  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [filters, setFilters] = useState<{
     status?: string;
     priority?: string;
@@ -98,22 +102,57 @@ export default function TodosPage() {
     loadTodos();
   }, [data.page, data.size, filters.status, filters.priority, filters.source]);
 
-  const handleCreate = async (values: Record<string, unknown>) => {
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setEditingTodo(null);
+    form.resetFields();
+  };
+
+  const openCreateDrawer = () => {
+    setEditingTodo(null);
+    form.resetFields();
+    form.setFieldsValue({ priority: 'medium', tags: [] });
+    setDrawerOpen(true);
+  };
+
+  const openEditDrawer = (record: Todo) => {
+    setEditingTodo(record);
+    form.resetFields();
+    form.setFieldsValue({
+      title: record.title,
+      description: record.description,
+      priority: record.priority,
+      due_date: record.due_date ? dayjs(record.due_date) : null,
+      tags: record.tags ?? [],
+      project: record.project,
+    });
+    setDrawerOpen(true);
+  };
+
+  const handleSubmitTodo = async (values: Record<string, unknown>) => {
+    setSaving(true);
     try {
-      await createTodo({
+      const payload = {
         title: values.title,
         description: values.description,
         priority: values.priority ?? 'medium',
         due_date: values.due_date ? (values.due_date as { toISOString?: () => string })?.toISOString?.() : undefined,
         tags: Array.isArray(values.tags) ? values.tags : [],
         project: values.project as string | undefined,
-      });
-      message.success('创建成功');
-      setDrawerOpen(false);
-      form.resetFields();
+      };
+      if (editingTodo) {
+        await updateTodo(editingTodo.id, payload);
+        message.success('修改成功');
+      } else {
+        await createTodo(payload);
+        message.success('创建成功');
+      }
+      closeDrawer();
       loadTodos();
     } catch {
-      message.error('创建失败');
+      message.error(editingTodo ? '修改失败' : '创建失败');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -166,20 +205,18 @@ export default function TodosPage() {
     input.click();
   };
 
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<string | null>(null);
 
-  const handleSubmitToOrchestration = async () => {
-    if (selectedRowKeys.length === 0) return;
-    setSubmitting(true);
+  const handleConfirmTask = async (record: Todo) => {
+    setSubmitting(record.id);
     try {
-      const res = await submitOrchestration({ todo_ids: selectedRowKeys });
+      const res = await submitOrchestration({ todo_ids: [record.id] });
       const body = (res as { data: { data?: { orch_id?: string; status?: string; error?: string } } }).data;
-      const result = body?.data ?? body;
+      const result = (body?.data ?? body) as { orch_id?: string; status?: string; error?: string } | undefined;
       if (result?.error) {
         message.error(`编排提交失败: ${result.error}`);
       } else {
-        message.success(`已提交 ${selectedRowKeys.length} 个任务到编排`);
-        setSelectedRowKeys([]);
+        message.success('任务已提交编排');
         navigate(ROUTES.ORCHESTRATION);
       }
     } catch (e: unknown) {
@@ -187,7 +224,7 @@ export default function TodosPage() {
       const detail = err?.response?.data?.detail || err?.message || '提交失败';
       message.error(`编排提交失败: ${detail}`);
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
     }
   };
 
@@ -241,16 +278,30 @@ export default function TodosPage() {
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 200,
       render: (_, record) => (
-        <Popconfirm
-          title="确定删除？"
-          onConfirm={() => handleDelete(record.id)}
-        >
-          <Button type="link" danger size="small">
-            删除
+        <Space>
+          <Button
+            type="primary"
+            size="small"
+            onClick={() => handleConfirmTask(record)}
+            loading={submitting === record.id}
+            disabled={record.status !== TodoStatus.Pending && record.status !== TodoStatus.PendingConfirm}
+          >
+            确认
           </Button>
-        </Popconfirm>
+          <Button type="link" size="small" onClick={() => openEditDrawer(record)}>
+            编辑
+          </Button>
+          <Popconfirm
+            title="确定删除？"
+            onConfirm={() => handleDelete(record.id)}
+          >
+            <Button type="link" danger size="small">
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -262,19 +313,11 @@ export default function TodosPage() {
           待办任务
         </Title>
         <Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
             新建待办
           </Button>
           <Button icon={<UploadOutlined />} onClick={handleBatchImport} loading={importLoading}>
             批量导入
-          </Button>
-          <Button
-            icon={<SendOutlined />}
-            disabled={selectedRowKeys.length === 0}
-            loading={submitting}
-            onClick={handleSubmitToOrchestration}
-          >
-            提交到编排 {selectedRowKeys.length > 0 ? `(${selectedRowKeys.length})` : ''}
           </Button>
           <Space>
             <span>列表</span>
@@ -326,10 +369,6 @@ export default function TodosPage() {
         loading={loading}
         columns={columns}
         dataSource={data.items}
-        rowSelection={{
-          selectedRowKeys,
-          onChange: (keys) => setSelectedRowKeys(keys as string[]),
-        }}
         pagination={{
           current: data.page,
           pageSize: data.size,
@@ -338,19 +377,38 @@ export default function TodosPage() {
           showTotal: (t) => `共 ${t} 条`,
           onChange: (p, s) => setData((d) => ({ ...d, page: p, size: s ?? 20 })),
         }}
+        expandable={{
+          expandedRowRender: (record) => (
+             <div style={{ margin: 0, padding: 12, backgroundColor: '#fafafa', borderRadius: 4 }}>
+                <Descriptions title="任务详情" column={1} size="small" bordered>
+                   <Descriptions.Item label="任务描述">{record.description || '无'}</Descriptions.Item>
+                   <Descriptions.Item label="编排详情">
+                     {record.orchestration_id ? (
+                       <Space direction="vertical">
+                          <span>编排ID: {record.orchestration_id}</span>
+                       </Space>
+                     ) : '未编排'}
+                   </Descriptions.Item>
+                   <Descriptions.Item label="调度详情">
+                     {record.status === TodoStatus.Scheduling ? '调度执行中' : (record.status === TodoStatus.Orchestrating ? '正在编排分析中' : '无')}
+                   </Descriptions.Item>
+                </Descriptions>
+             </div>
+          ),
+        }}
       />
 
       <Drawer
-        title="新建待办"
+        title={editingTodo ? '编辑待办' : '新建待办'}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={closeDrawer}
         width={480}
         footer={null}
       >
         <Form
           form={form}
           layout="vertical"
-          onFinish={handleCreate}
+          onFinish={handleSubmitTodo}
           initialValues={{ priority: 'medium' }}
         >
           <Form.Item name="title" label="标题" rules={[{ required: true }]}>
@@ -373,10 +431,10 @@ export default function TodosPage() {
           </Form.Item>
           <Form.Item>
             <Space>
-              <Button type="primary" htmlType="submit">
-                创建
+              <Button type="primary" htmlType="submit" loading={saving}>
+                {editingTodo ? '保存修改' : '创建'}
               </Button>
-              <Button onClick={() => setDrawerOpen(false)}>取消</Button>
+              <Button onClick={closeDrawer}>取消</Button>
             </Space>
           </Form.Item>
         </Form>

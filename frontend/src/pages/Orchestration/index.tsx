@@ -29,6 +29,7 @@ import {
   CheckCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import {
   getPendingOrchestrations,
   getOrchestration,
@@ -73,6 +74,8 @@ interface OrchestrationDetail {
     input_params?: Record<string, unknown>;
     priority?: string;
     estimated_duration_minutes?: number;
+    start_time?: string | null;
+    deadline?: string | null;
     steps?: Array<{ order: number; workflow_name: string }>;
   };
   llm_reason?: string;
@@ -117,14 +120,14 @@ function OrchestrationCard({
       const d = (data?.data ?? data) as OrchestrationDetail | null;
       setDetail(d || null);
       if (d) {
-        const plan = d.plan || {};
-        const inputParams = plan.input_params || {};
+        const plan = d.plan;
+        const inputParams = plan?.input_params ?? {};
         form.setFieldsValue({
           ...inputParams,
-          priority: plan.priority || 'medium',
-          estimated_duration_minutes: plan.estimated_duration_minutes ?? 30,
-          start_time: null,
-          deadline: null,
+          priority: plan?.priority || 'medium',
+          estimated_duration_minutes: plan?.estimated_duration_minutes ?? 30,
+          start_time: plan?.start_time ? dayjs(plan.start_time) : null,
+          deadline: plan?.deadline ? dayjs(plan.deadline) : null,
         });
       }
     } catch {
@@ -155,22 +158,31 @@ function OrchestrationCard({
     }
   }, [agentModalOpen]);
 
+  const buildInputParams = (values: Record<string, unknown>) => {
+    const paramKeys = Object.keys(detail?.plan?.input_params || {});
+    return paramKeys.reduce<Record<string, unknown>>((acc, key) => {
+      acc[key] = values[key];
+      return acc;
+    }, {});
+  };
+
   const handleConfirm = async () => {
     if (!detail) return;
     try {
       const values = form.getFieldsValue();
-      const plan = detail.plan || {};
-      const planType = plan.plan_type || (detail.suggested_wagent ? 'wagent' : 'agent');
+      const plan = detail.plan;
+      const planType = plan?.plan_type || (detail.suggested_wagent ? 'wagent' : 'agent');
+      const payload = {
+        input_params: buildInputParams(values),
+        priority: values.priority,
+        estimated_duration_minutes: values.estimated_duration_minutes,
+        start_time: values.start_time?.toISOString?.(),
+        deadline: values.deadline?.toISOString?.(),
+      };
       if (planType === 'wagent' || planType === 'new_wagent') {
-        await confirmWAgent(orch.orch_id, {
-          input_params: values,
-          priority: values.priority,
-          estimated_duration_minutes: values.estimated_duration_minutes,
-          start_time: values.start_time?.toISOString?.(),
-          deadline: values.deadline?.toISOString?.(),
-        });
+        await confirmWAgent(orch.orch_id, payload);
       } else {
-        await confirmOrchestration(orch.orch_id);
+        await confirmOrchestration(orch.orch_id, payload);
       }
       message.success('已确认执行');
       onRefreshList();
@@ -197,9 +209,11 @@ function OrchestrationCard({
     try {
       const values = form.getFieldsValue();
       await modifyOrchestrationParams(orch.orch_id, {
-        input_params: values,
+        input_params: buildInputParams(values),
         priority: values.priority,
         estimated_duration_minutes: values.estimated_duration_minutes,
+        start_time: values.start_time?.toISOString?.(),
+        deadline: values.deadline?.toISOString?.(),
       });
       message.success('参数已更新');
     } catch (e) {
@@ -222,7 +236,7 @@ function OrchestrationCard({
     try {
       const res = await retryOrchestration(orch.orch_id);
       const body = (res as { data: { data?: { status?: string; error?: string } } }).data;
-      const result = body?.data ?? body;
+      const result = (body?.data ?? body) as { status?: string; error?: string } | undefined;
       if (result?.error) {
         message.error(`重新编排失败: ${result.error}`);
       } else {
@@ -262,8 +276,9 @@ function OrchestrationCard({
   const statusCfg = STATUS_CONFIG[orch.status] || { color: 'default', text: orch.status, icon: null };
 
   const getHeaderName = () => {
-      // Use summary if available, otherwise orch_id
-      return orch.summary || `编排 #${orch.orch_id.slice(-6)}`;
+      const firstTodo = detail?.todos?.[0];
+      const detailTitle = firstTodo?.title?.trim() || '';
+      return detailTitle || orch.summary || `编排 #${orch.orch_id.slice(-6)}`;
   };
   const getMetaInfo = () => {
       // Show orch_id and agent name
@@ -365,7 +380,7 @@ function OrchestrationCard({
                   <Text strong>任务摘要：</Text>
                   <div style={{ marginTop: 4 }}>
                     {detail.todos?.map((t) => (
-                      <Tag key={t.id} style={{ marginBottom: 4 }}>{t.title}</Tag>
+                      <Tag key={t.id} style={{ marginBottom: 4 }}>{t.description?.trim() || '无描述'}</Tag>
                     ))}
                   </div>
                 </div>
@@ -396,7 +411,7 @@ function OrchestrationCard({
                 <Text strong>任务摘要：</Text>
                 <div style={{ marginTop: 4 }}>
                   {detail.todos?.map((t) => (
-                    <Tag key={t.id} style={{ marginBottom: 4 }}>{t.title}</Tag>
+                    <Tag key={t.id} style={{ marginBottom: 4 }}>{t.description?.trim() || '无描述'}</Tag>
                   ))}
                   {(!detail.todos || detail.todos.length === 0) && (
                     <Text type="secondary">-</Text>
@@ -550,7 +565,7 @@ export default function OrchestrationPage() {
   const [orchestrations, setOrchestrations] = useState<OrchestrationItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const { on, off } = useSSE();
-  const loadPendingRef = useRef<() => Promise<void>>();
+  const loadPendingRef = useRef<(() => Promise<void>) | null>(null);
 
   const loadPending = async () => {
     setLoading(true);
@@ -598,11 +613,15 @@ export default function OrchestrationPage() {
   };
 
   const renderList = (status: string) => {
+      const allVisibleStatuses = new Set(['analyzing', 'pending_confirm']);
       const items = status === 'all'
-        ? orchestrations
+        ? orchestrations.filter(o => allVisibleStatuses.has(o.status))
         : orchestrations.filter(o => o.status === status);
 
-      if (items.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无任务" />;
+      if (items.length === 0) {
+        const description = status === 'all' ? '暂无分析中或待确认的编排任务' : '暂无任务';
+        return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={description} />;
+      }
 
       const isPending = status === 'pending_confirm';
 
@@ -674,9 +693,6 @@ export default function OrchestrationPage() {
       { key: 'all', label: '全部', children: renderList('all') },
       { key: 'analyzing', label: '分析中', children: renderList('analyzing') },
       { key: 'pending_confirm', label: '待确认', children: renderList('pending_confirm') },
-      { key: 'confirmed', label: '执行中', children: renderList('confirmed') }, // mapped confirm to "Executing" concept usually
-      { key: 'failed', label: '失败', children: renderList('failed') },
-      { key: 'cancelled', label: '已取消', children: renderList('cancelled') },
   ];
 
   return (
