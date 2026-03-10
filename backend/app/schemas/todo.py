@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional
 
@@ -8,8 +8,9 @@ class TodoCreate(BaseModel):
     description: str | None = None
     priority: str = "medium"
     source: str = "manual"
+    execution_mode: str = "system"
     due_date: datetime | None = None
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     project: str | None = None
 
 
@@ -18,6 +19,7 @@ class TodoUpdate(BaseModel):
     description: Optional[str] = None
     priority: Optional[str] = None
     source: Optional[str] = None
+    execution_mode: Optional[str] = None
     due_date: Optional[datetime] = None
     tags: Optional[list[str]] = None
     project: Optional[str] = None
@@ -31,8 +33,9 @@ class TodoResponse(BaseModel):
     description: str | None = None
     priority: str = "medium"
     source: str = "manual"
+    execution_mode: str = "system"
     due_date: datetime | None = None
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     project: str | None = None
     status: str
     source_ref: str | None = None

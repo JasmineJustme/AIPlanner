@@ -321,6 +321,18 @@ async def submit_orchestration(
     if not todos:
         raise HTTPException(status_code=400, detail="未找到对应的待办任务")
 
+    user_execution_todos = [todo.title for todo in todos if getattr(todo, "execution_mode", "system") == "user"]
+    if user_execution_todos:
+        raise HTTPException(status_code=400, detail="用户执行任务不能提交系统编排")
+
+    invalid_status_todos = [
+        todo.title
+        for todo in todos
+        if getattr(todo, "status", "pending") not in {"pending", "pending_confirm"}
+    ]
+    if invalid_status_todos:
+        raise HTTPException(status_code=400, detail="仅待确认的系统执行任务可提交编排")
+
     todo_list = [
         {
             "id": t.id,

@@ -1,28 +1,33 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  Alert,
   Button,
-  Table,
-  Space,
-  Select,
+  Card,
   DatePicker,
+  Descriptions,
   Drawer,
   Form,
   Input,
   message,
+  Pagination,
   Popconfirm,
+  Select,
+  Space,
+  Table,
   Tag,
   Typography,
-  Descriptions,
 } from 'antd';
-import { PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import { PlusOutlined, RedoOutlined, UploadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  getTodos,
+  completeTodo,
   createTodo,
-  updateTodo,
   deleteTodo,
+  getTodos,
+  rerunTodo,
+  updateTodo,
 } from '@/api/todos';
 import { submitOrchestration } from '@/api/orchestration';
 import type { Todo } from '@/types/todo';
@@ -31,9 +36,16 @@ import SourceTag from '@/components/SourceTag';
 import { formatDate } from '@/utils/format';
 import { parseExcelFile } from '@/utils/excel';
 import { ROUTES } from '@/constants/routes';
-import { TODO_STATUS_MAP, PRIORITY_MAP, SOURCE_MAP, TodoStatus } from '@/constants/status';
+import {
+  PRIORITY_MAP,
+  SOURCE_MAP,
+  TODO_EXECUTION_MODE_MAP,
+  TODO_STATUS_MAP,
+  TodoExecutionMode,
+  TodoStatus,
+} from '@/constants/status';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 const STATUS_OPTIONS = Object.entries(TODO_STATUS_MAP).map(([k, v]) => ({
   value: k,
@@ -47,6 +59,10 @@ const SOURCE_OPTIONS = Object.entries(SOURCE_MAP).map(([k, v]) => ({
   value: k,
   label: v.text,
 }));
+const EXECUTION_MODE_OPTIONS = Object.entries(TODO_EXECUTION_MODE_MAP).map(([k, v]) => ({
+  value: k,
+  label: v.text,
+}));
 
 export default function TodosPage() {
   const navigate = useNavigate();
@@ -55,6 +71,7 @@ export default function TodosPage() {
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [saving, setSaving] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
+  const [submitting, setSubmitting] = useState<string | null>(null);
   const [data, setData] = useState<{ items: Todo[]; total: number; page: number; size: number; pages: number }>({
     items: [],
     total: 0,
@@ -111,7 +128,11 @@ export default function TodosPage() {
   const openCreateDrawer = () => {
     setEditingTodo(null);
     form.resetFields();
-    form.setFieldsValue({ priority: 'medium', tags: [] });
+    form.setFieldsValue({
+      priority: 'medium',
+      tags: [],
+      execution_mode: TodoExecutionMode.System,
+    });
     setDrawerOpen(true);
   };
 
@@ -122,6 +143,7 @@ export default function TodosPage() {
       title: record.title,
       description: record.description,
       priority: record.priority,
+      execution_mode: record.execution_mode || TodoExecutionMode.System,
       due_date: record.due_date ? dayjs(record.due_date) : null,
       tags: record.tags ?? [],
       project: record.project,
@@ -136,6 +158,7 @@ export default function TodosPage() {
         title: values.title,
         description: values.description,
         priority: values.priority ?? 'medium',
+        execution_mode: values.execution_mode ?? TodoExecutionMode.System,
         due_date: values.due_date ? (values.due_date as { toISOString?: () => string })?.toISOString?.() : undefined,
         tags: Array.isArray(values.tags) ? values.tags : [],
         project: values.project as string | undefined,
@@ -182,6 +205,7 @@ export default function TodosPage() {
             title: String(r['标题'] ?? r['title'] ?? ''),
             description: r['描述'] || r['description'] ? String(r['描述'] ?? r['description']) : undefined,
             priority: (r['优先级'] ?? r['priority'] ?? 'medium') as string,
+            execution_mode: TodoExecutionMode.System,
             project: r['项目'] || r['project'] ? String(r['项目'] ?? r['project']) : undefined,
             tags: typeof r['标签'] === 'string' ? (r['标签'] as string).split(/[,，]/).map((s) => s.trim()).filter(Boolean) : [],
           }));
@@ -196,7 +220,7 @@ export default function TodosPage() {
         }
         message.success(`成功导入 ${imported} 条`);
         loadTodos();
-      } catch (err) {
+      } catch {
         message.error('导入失败');
       } finally {
         setImportLoading(false);
@@ -204,8 +228,6 @@ export default function TodosPage() {
     };
     input.click();
   };
-
-  const [submitting, setSubmitting] = useState<string | null>(null);
 
   const handleConfirmTask = async (record: Todo) => {
     setSubmitting(record.id);
@@ -226,6 +248,98 @@ export default function TodosPage() {
     } finally {
       setSubmitting(null);
     }
+  };
+
+  const handleCompleteTask = async (record: Todo) => {
+    setSubmitting(record.id);
+    try {
+      await completeTodo(record.id);
+      message.success('任务已完成');
+      loadTodos();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string };
+      const detail = err?.response?.data?.detail || err?.message || '完成失败';
+      message.error(detail);
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const handleRerunTask = async (record: Todo) => {
+    setSubmitting(record.id);
+    try {
+      await rerunTodo(record.id);
+      message.success('已生成新的待办任务');
+      loadTodos();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string };
+      const detail = err?.response?.data?.detail || err?.message || '重新执行失败';
+      message.error(detail);
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const getExecutionMode = (record: Todo) => record.execution_mode || TodoExecutionMode.System;
+  const isUserExecution = (record: Todo) => getExecutionMode(record) === TodoExecutionMode.User;
+  const isPendingLike = (record: Todo) =>
+    record.status === TodoStatus.Pending || record.status === TodoStatus.PendingConfirm;
+  const isCompleted = (record: Todo) => record.status === TodoStatus.Completed;
+  const isSystemProcessing = (record: Todo) =>
+    record.status === TodoStatus.Orchestrating || record.status === TodoStatus.Scheduling;
+
+  const renderDeleteAction = (record: Todo, disabled = false) => {
+    if (disabled) {
+      return (
+        <Button type="link" danger size="small" disabled>
+          删除
+        </Button>
+      );
+    }
+
+    return (
+      <Popconfirm title="确定删除？" onConfirm={() => handleDelete(record.id)}>
+        <Button type="link" danger size="small">
+          删除
+        </Button>
+      </Popconfirm>
+    );
+  };
+
+  const renderExpandedRow = (record: Todo) => {
+    const executionMode = getExecutionMode(record);
+    const modeConfig = TODO_EXECUTION_MODE_MAP[executionMode] || TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System];
+
+    return (
+      <div style={{ margin: 0, padding: 12, backgroundColor: '#fafafa', borderRadius: 4 }}>
+        <Descriptions title="任务详情" column={1} size="small" bordered>
+          <Descriptions.Item label="任务描述">{record.description || '无'}</Descriptions.Item>
+          <Descriptions.Item label="执行方式">
+            <Tag color={modeConfig.color}>{modeConfig.text}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label={executionMode === TodoExecutionMode.User ? '执行提示' : '编排详情'}>
+            {executionMode === TodoExecutionMode.User ? (
+              '该任务由用户手动执行，完成后点击“完成”即可将状态更新为已完成。'
+            ) : record.orchestration_id ? (
+              <Space direction="vertical">
+                <span>编排ID: {record.orchestration_id}</span>
+              </Space>
+            ) : (
+              '未编排'
+            )}
+          </Descriptions.Item>
+          <Descriptions.Item label="调度详情">
+            {executionMode === TodoExecutionMode.User
+              ? '用户手动执行，无系统调度。'
+              : record.status === TodoStatus.Scheduling
+                ? '调度执行中'
+                : record.status === TodoStatus.Orchestrating
+                  ? '正在编排分析中'
+                  : '无'}
+          </Descriptions.Item>
+        </Descriptions>
+      </div>
+    );
   };
 
   const columns: ColumnsType<Todo> = [
@@ -273,38 +387,119 @@ export default function TodosPage() {
       key: 'tags',
       width: 120,
       render: (tags: string[]) =>
-        Array.isArray(tags) ? tags.slice(0, 3).join(', ') : '-',
+        Array.isArray(tags) && tags.length > 0 ? tags.slice(0, 3).join(', ') : '-',
     },
     {
       title: '操作',
       key: 'action',
-      width: 200,
-      render: (_, record) => (
-        <Space>
-          <Button
-            type="primary"
-            size="small"
-            onClick={() => handleConfirmTask(record)}
-            loading={submitting === record.id}
-            disabled={record.status !== TodoStatus.Pending && record.status !== TodoStatus.PendingConfirm}
-          >
-            确认
-          </Button>
-          <Button type="link" size="small" onClick={() => openEditDrawer(record)}>
-            编辑
-          </Button>
-          <Popconfirm
-            title="确定删除？"
-            onConfirm={() => handleDelete(record.id)}
-          >
-            <Button type="link" danger size="small">
-              删除
+      width: 260,
+      render: (_, record) => {
+        const isUserTodo = isUserExecution(record);
+        const pendingLike = isPendingLike(record);
+        const completed = isCompleted(record);
+        const systemProcessing = isSystemProcessing(record);
+
+        if (completed) {
+          return (
+            <Space>
+              <Button
+                type="primary"
+                size="small"
+                icon={<RedoOutlined />}
+                onClick={() => handleRerunTask(record)}
+                loading={submitting === record.id}
+              >
+                重新执行
+              </Button>
+              {renderDeleteAction(record)}
+            </Space>
+          );
+        }
+
+        if (isUserTodo) {
+          return (
+            <Space>
+              <Button
+                type="primary"
+                size="small"
+                onClick={() => handleCompleteTask(record)}
+                loading={submitting === record.id}
+                disabled={!pendingLike}
+              >
+                完成
+              </Button>
+              <Button
+                type="link"
+                size="small"
+                onClick={() => openEditDrawer(record)}
+                disabled={!pendingLike}
+              >
+                编辑
+              </Button>
+              {renderDeleteAction(record, !pendingLike)}
+            </Space>
+          );
+        }
+
+        if (systemProcessing) {
+          return (
+            <Space>
+              <Button type="primary" size="small" disabled>
+                确认
+              </Button>
+              <Button type="link" size="small" disabled>
+                编辑
+              </Button>
+              {renderDeleteAction(record, true)}
+            </Space>
+          );
+        }
+
+        return (
+          <Space>
+            <Button
+              type="primary"
+              size="small"
+              onClick={() => handleConfirmTask(record)}
+              loading={submitting === record.id}
+              disabled={!pendingLike}
+            >
+              确认
             </Button>
-          </Popconfirm>
-        </Space>
-      ),
+            <Button
+              type="link"
+              size="small"
+              onClick={() => openEditDrawer(record)}
+              disabled={!pendingLike}
+            >
+              编辑
+            </Button>
+            {renderDeleteAction(record, !pendingLike)}
+          </Space>
+        );
+      },
     },
   ];
+
+  const userTodos = data.items.filter((item) => getExecutionMode(item) === TodoExecutionMode.User);
+  const systemTodos = data.items.filter((item) => getExecutionMode(item) !== TodoExecutionMode.User);
+
+  if (loading && data.items.length === 0) {
+    return (
+      <div style={{ padding: 48, textAlign: 'center' }}>
+        <Text type="secondary">加载待办列表...</Text>
+      </div>
+    );
+  }
+
+  if (data.total === 0) {
+    return (
+      <div>
+        <Title level={3}>待办任务</Title>
+        <Text type="secondary">暂无待办记录，请先创建任务。</Text>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -364,39 +559,60 @@ export default function TodosPage() {
         />
       </Space>
 
-      <Table
-        rowKey="id"
-        loading={loading}
-        columns={columns}
-        dataSource={data.items}
-        pagination={{
-          current: data.page,
-          pageSize: data.size,
-          total: data.total,
-          showSizeChanger: true,
-          showTotal: (t) => `共 ${t} 条`,
-          onChange: (p, s) => setData((d) => ({ ...d, page: p, size: s ?? 20 })),
-        }}
-        expandable={{
-          expandedRowRender: (record) => (
-             <div style={{ margin: 0, padding: 12, backgroundColor: '#fafafa', borderRadius: 4 }}>
-                <Descriptions title="任务详情" column={1} size="small" bordered>
-                   <Descriptions.Item label="任务描述">{record.description || '无'}</Descriptions.Item>
-                   <Descriptions.Item label="编排详情">
-                     {record.orchestration_id ? (
-                       <Space direction="vertical">
-                          <span>编排ID: {record.orchestration_id}</span>
-                       </Space>
-                     ) : '未编排'}
-                   </Descriptions.Item>
-                   <Descriptions.Item label="调度详情">
-                     {record.status === TodoStatus.Scheduling ? '调度执行中' : (record.status === TodoStatus.Orchestrating ? '正在编排分析中' : '无')}
-                   </Descriptions.Item>
-                </Descriptions>
-             </div>
-          ),
-        }}
-      />
+      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        <Card
+          title="用户执行模块"
+          extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.User].color}>{userTodos.length}</Tag>}
+        >
+          <Alert
+            type="info"
+            showIcon
+            message="用户执行任务只做展示与提醒；待确认时可完成、编辑和删除，已完成后可删除或重新执行。"
+            style={{ marginBottom: 16 }}
+          />
+          <Table
+            rowKey="id"
+            loading={loading}
+            columns={columns}
+            dataSource={userTodos}
+            pagination={false}
+            locale={{ emptyText: '暂无用户执行任务' }}
+            expandable={{ expandedRowRender: renderExpandedRow }}
+          />
+        </Card>
+
+        <Card
+          title="系统执行模块"
+          extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System].color}>{systemTodos.length}</Tag>}
+        >
+          <Alert
+            type="warning"
+            showIcon
+            message="系统执行任务待确认时可确认、编辑和删除；编排中或调度中不可操作；已完成后可删除或重新执行。"
+            style={{ marginBottom: 16 }}
+          />
+          <Table
+            rowKey="id"
+            loading={loading}
+            columns={columns}
+            dataSource={systemTodos}
+            pagination={false}
+            locale={{ emptyText: '暂无系统执行任务' }}
+            expandable={{ expandedRowRender: renderExpandedRow }}
+          />
+        </Card>
+      </Space>
+
+      <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+        <Pagination
+          current={data.page}
+          pageSize={data.size}
+          total={data.total}
+          showSizeChanger
+          showTotal={(total) => `共 ${total} 条`}
+          onChange={(page, size) => setData((d) => ({ ...d, page, size: size ?? d.size }))}
+        />
+      </div>
 
       <Drawer
         title={editingTodo ? '编辑待办' : '新建待办'}
@@ -409,13 +625,16 @@ export default function TodosPage() {
           form={form}
           layout="vertical"
           onFinish={handleSubmitTodo}
-          initialValues={{ priority: 'medium' }}
+          initialValues={{ priority: 'medium', execution_mode: TodoExecutionMode.System }}
         >
           <Form.Item name="title" label="标题" rules={[{ required: true }]}>
             <Input placeholder="请输入标题" />
           </Form.Item>
           <Form.Item name="description" label="描述">
             <Input.TextArea rows={3} placeholder="请输入描述" />
+          </Form.Item>
+          <Form.Item name="execution_mode" label="执行模块" rules={[{ required: true, message: '请选择执行模块' }]}>
+            <Select options={EXECUTION_MODE_OPTIONS} />
           </Form.Item>
           <Form.Item name="priority" label="优先级">
             <Select options={PRIORITY_OPTIONS} />

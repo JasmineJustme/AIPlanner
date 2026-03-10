@@ -5,6 +5,7 @@ export interface Todo {
   status: string;
   priority: string;
   source: string;
+  execution_mode: string;
   source_ref?: string;
   due_date?: string;
   tags: string[];

@@ -120,3 +120,14 @@ export const MessageStatus = {
   Processed: 'processed',
 } as const;
 export type MessageStatus = (typeof MessageStatus)[keyof typeof MessageStatus];
+
+export const TodoExecutionMode = {
+  User: 'user',
+  System: 'system',
+} as const;
+export type TodoExecutionMode = (typeof TodoExecutionMode)[keyof typeof TodoExecutionMode];
+
+export const TODO_EXECUTION_MODE_MAP: Record<string, { color: string; text: string }> = {
+  [TodoExecutionMode.User]: { color: 'purple', text: '用户执行' },
+  [TodoExecutionMode.System]: { color: 'geekblue', text: '系统执行' },
+};

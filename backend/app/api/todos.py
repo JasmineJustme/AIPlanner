@@ -47,6 +47,14 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
         await db.flush()
 
 
+async def _get_todo_or_404(todo_id: str, db: AsyncSession) -> Todo:
+    result = await db.execute(select(Todo).where(Todo.id == todo_id))
+    todo = result.scalar_one_or_none()
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return todo
+
+
 @router.get("")
 async def list_todos(
     page: int = Query(1, ge=1),
@@ -54,6 +62,7 @@ async def list_todos(
     status: str | None = Query(None),
     priority: str | None = Query(None),
     source: str | None = Query(None),
+    execution_mode: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     await _reconcile_orchestration_todo_statuses(db)
@@ -69,6 +78,9 @@ async def list_todos(
     if source:
         q = q.where(Todo.source == source)
         count_q = count_q.where(Todo.source == source)
+    if execution_mode:
+        q = q.where(Todo.execution_mode == execution_mode)
+        count_q = count_q.where(Todo.execution_mode == execution_mode)
     count_result = await db.execute(count_q)
     total = count_result.scalar() or 0
     result = await db.execute(q.offset(offset).limit(size).order_by(Todo.created_at.desc()))
@@ -99,6 +111,7 @@ async def create_todo(
         status="pending",
         priority=data.get("priority", "medium"),
         source=data.get("source", "manual"),
+        execution_mode=data.get("execution_mode", "system"),
         due_date=data.get("due_date"),
         tags=data.get("tags", []),
         project=data.get("project"),
@@ -115,16 +128,64 @@ async def update_todo(
     payload: TodoUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Todo).where(Todo.id == todo_id))
-    todo = result.scalar_one_or_none()
-    if not todo:
-        raise HTTPException(status_code=404, detail="Todo not found")
+    todo = await _get_todo_or_404(todo_id, db)
     data = payload.model_dump(exclude_unset=True)
     for k, v in data.items():
         setattr(todo, k, v)
+
+    if data.get("execution_mode") == "user":
+        todo.orchestration_id = None
+        if todo.status != "completed":
+            todo.status = "pending"
+
     await db.flush()
     await db.refresh(todo)
     return {"code": 200, "message": "success", "data": TodoResponse.model_validate(todo)}
+
+
+@router.patch("/{todo_id}/complete")
+async def complete_todo(
+    todo_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    todo = await _get_todo_or_404(todo_id, db)
+    if todo.execution_mode != "user":
+        raise HTTPException(status_code=400, detail="仅用户执行任务支持手动完成")
+    if todo.status not in {"pending", "pending_confirm"}:
+        raise HTTPException(status_code=400, detail="仅待确认的用户执行任务支持手动完成")
+
+    todo.status = "completed"
+    todo.orchestration_id = None
+    await db.flush()
+    await db.refresh(todo)
+    return {"code": 200, "message": "success", "data": TodoResponse.model_validate(todo)}
+
+
+@router.post("/{todo_id}/rerun")
+async def rerun_todo(
+    todo_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    todo = await _get_todo_or_404(todo_id, db)
+    if todo.status != "completed":
+        raise HTTPException(status_code=400, detail="仅已完成任务支持重新执行")
+
+    new_todo = Todo(
+        title=todo.title,
+        description=todo.description,
+        status="pending_confirm",
+        priority=todo.priority,
+        source=todo.source,
+        execution_mode=todo.execution_mode,
+        source_ref=todo.source_ref,
+        due_date=todo.due_date,
+        tags=list(todo.tags or []),
+        project=todo.project,
+    )
+    db.add(new_todo)
+    await db.flush()
+    await db.refresh(new_todo)
+    return {"code": 200, "message": "success", "data": TodoResponse.model_validate(new_todo)}
 
 
 @router.delete("/{todo_id}")
@@ -132,10 +193,7 @@ async def delete_todo(
     todo_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Todo).where(Todo.id == todo_id))
-    todo = result.scalar_one_or_none()
-    if not todo:
-        raise HTTPException(status_code=404, detail="Todo not found")
+    todo = await _get_todo_or_404(todo_id, db)
     await db.delete(todo)
     return {"code": 200, "message": "success", "data": None}
 
@@ -166,10 +224,7 @@ async def confirm_review(
     payload: TodoReviewConfirm | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Todo).where(Todo.id == todo_id))
-    todo = result.scalar_one_or_none()
-    if not todo:
-        raise HTTPException(status_code=404, detail="Todo not found")
+    todo = await _get_todo_or_404(todo_id, db)
     todo.review_status = "confirmed"
     todo.review_reason = None
     if payload:
@@ -186,10 +241,7 @@ async def reject_review(
     todo_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Todo).where(Todo.id == todo_id))
-    todo = result.scalar_one_or_none()
-    if not todo:
-        raise HTTPException(status_code=404, detail="Todo not found")
+    todo = await _get_todo_or_404(todo_id, db)
     todo.review_status = "rejected"
     await db.flush()
     await db.refresh(todo)
