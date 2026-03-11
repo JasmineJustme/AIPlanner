@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Button,
@@ -35,7 +34,6 @@ import PriorityTag from '@/components/PriorityTag';
 import SourceTag from '@/components/SourceTag';
 import { formatDate } from '@/utils/format';
 import { parseExcelFile } from '@/utils/excel';
-import { ROUTES } from '@/constants/routes';
 import {
   PRIORITY_MAP,
   SOURCE_MAP,
@@ -65,7 +63,6 @@ const EXECUTION_MODE_OPTIONS = Object.entries(TODO_EXECUTION_MODE_MAP).map(([k, 
 }));
 
 export default function TodosPage() {
-  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
@@ -87,7 +84,14 @@ export default function TodosPage() {
   }>({});
   const [form] = Form.useForm();
 
-  const loadTodos = async () => {
+  const patchTodo = (todoId: string, updater: (todo: Todo) => Todo) => {
+    setData((current) => ({
+      ...current,
+      items: current.items.map((item) => (item.id === todoId ? updater(item) : item)),
+    }));
+  };
+
+  const loadTodos = useCallback(async () => {
     setLoading(true);
     try {
       const res = await getTodos({
@@ -113,11 +117,11 @@ export default function TodosPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [data.page, data.size, filters.status, filters.priority, filters.source]);
 
   useEffect(() => {
     loadTodos();
-  }, [data.page, data.size, filters.status, filters.priority, filters.source]);
+  }, [loadTodos]);
 
   const closeDrawer = () => {
     setDrawerOpen(false);
@@ -230,18 +234,30 @@ export default function TodosPage() {
   };
 
   const handleConfirmTask = async (record: Todo) => {
+    const previousRecord = { ...record };
+    patchTodo(record.id, (item) => ({
+      ...item,
+      status: TodoStatus.Orchestrating,
+    }));
     setSubmitting(record.id);
     try {
       const res = await submitOrchestration({ todo_ids: [record.id] });
       const body = (res as { data: { data?: { orch_id?: string; status?: string; error?: string } } }).data;
       const result = (body?.data ?? body) as { orch_id?: string; status?: string; error?: string } | undefined;
+
+      patchTodo(record.id, (item) => ({
+        ...item,
+        status: TodoStatus.Orchestrating,
+        orchestration_id: result?.orch_id ?? item.orchestration_id,
+      }));
+
       if (result?.error) {
-        message.error(`编排提交失败: ${result.error}`);
+        message.warning(`任务已提交编排，但分析失败: ${result.error}`);
       } else {
         message.success('任务已提交编排');
-        navigate(ROUTES.ORCHESTRATION);
       }
     } catch (e: unknown) {
+      patchTodo(record.id, () => previousRecord);
       const err = e as { response?: { data?: { detail?: string } }; message?: string };
       const detail = err?.response?.data?.detail || err?.message || '提交失败';
       message.error(`编排提交失败: ${detail}`);

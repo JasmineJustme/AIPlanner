@@ -623,6 +623,27 @@ export default function OrchestrationPage() {
   const { on, off } = useSSE();
   const loadPendingRef = useRef<(() => Promise<void>) | null>(null);
 
+  const handleOrchestrationEvent = useCallback((payload: unknown) => {
+    const event = payload as { orch_id?: string; status?: string; error?: string; removed?: boolean } | undefined;
+    loadPendingRef.current?.();
+
+    if (event?.removed) {
+      message.info('已取消的编排记录已移除');
+      return;
+    }
+    if (event?.status === 'pending_confirm') {
+      message.success('LLM 分析完成，编排已进入待确认');
+      return;
+    }
+    if (event?.status === 'failed') {
+      message.warning(`编排分析失败${event.error ? `：${event.error}` : ''}`);
+      return;
+    }
+    if (event?.status === 'completed') {
+      message.success('编排执行完成');
+    }
+  }, []);
+
   const loadPending = async () => {
     setLoading(true);
     try {
@@ -644,10 +665,9 @@ export default function OrchestrationPage() {
   }, []);
 
   useEffect(() => {
-    const handler = () => loadPendingRef.current?.();
-    on('orchestration_complete', handler);
-    return () => off('orchestration_complete', handler);
-  }, [on, off]);
+    on('orchestration_complete', handleOrchestrationEvent);
+    return () => off('orchestration_complete', handleOrchestrationEvent);
+  }, [handleOrchestrationEvent, on, off]);
 
   const handleConfirmedNavigate = useCallback(() => {
     navigate(ROUTES.SCHEDULING);
@@ -752,7 +772,7 @@ export default function OrchestrationPage() {
   }
 
   const items = [
-      { key: 'all', label: '全部', children: renderList('all') },
+      { key: 'all', label: '全部模块', children: renderList('all') },
       { key: 'analyzing', label: '分析中', children: renderList('analyzing') },
       { key: 'pending_confirm', label: '待确认', children: renderList('pending_confirm') },
   ];
@@ -763,7 +783,7 @@ export default function OrchestrationPage() {
         <Title level={3} style={{ margin: 0 }}>智能编排</Title>
         <Button onClick={loadPending}>刷新</Button>
       </div>
-      <Tabs defaultActiveKey="pending_confirm" items={items} />
+      <Tabs defaultActiveKey="all" items={items} />
     </div>
   );
 }

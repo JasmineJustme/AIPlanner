@@ -13,6 +13,14 @@ router = APIRouter(prefix="/config/llm", tags=["config-llm"])
 LLM_PURPOSES = ["chat", "extract", "summarize", "todo_analysis", "orchestration", "scheduling"]
 
 
+def _serialize_llm_config(cfg: LLMConfig) -> LLMConfigResponse:
+    data = LLMConfigResponse.model_validate(cfg).model_dump()
+    prefs = cfg.user_preferences or {}
+    data["temperature_enabled"] = prefs.get("temperature_enabled", True)
+    data["top_p_enabled"] = prefs.get("top_p_enabled", True)
+    return LLMConfigResponse.model_validate(data)
+
+
 @router.get("")
 async def list_llm_configs(
     db: AsyncSession = Depends(get_db),
@@ -29,7 +37,7 @@ async def list_llm_configs(
     return {
         "code": 200,
         "message": "success",
-        "data": [LLMConfigResponse.model_validate(i) for i in items],
+        "data": [_serialize_llm_config(i) for i in items],
     }
 
 
@@ -41,12 +49,11 @@ async def get_llm_config(
     result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
     cfg = result.scalar_one_or_none()
     if not cfg:
-        # Instead of 404, create a default empty config
         cfg = LLMConfig(purpose=purpose, prompt_template="")
         db.add(cfg)
         await db.flush()
         await db.refresh(cfg)
-    return {"code": 200, "message": "success", "data": LLMConfigResponse.model_validate(cfg)}
+    return {"code": 200, "message": "success", "data": _serialize_llm_config(cfg)}
 
 
 @router.put("/{purpose}")
@@ -62,11 +69,18 @@ async def update_llm_config(
         db.add(cfg)
         await db.flush()
     data = payload.model_dump(exclude_unset=True)
+
+    prefs = dict(cfg.user_preferences or {})
+    for pref_key in ("temperature_enabled", "top_p_enabled"):
+        if pref_key in data:
+            prefs[pref_key] = data.pop(pref_key)
+    cfg.user_preferences = prefs
+
     for k, v in data.items():
         setattr(cfg, k, v)
     await db.flush()
     await db.refresh(cfg)
-    return {"code": 200, "message": "success", "data": LLMConfigResponse.model_validate(cfg)}
+    return {"code": 200, "message": "success", "data": _serialize_llm_config(cfg)}
 
 
 @router.post("/{purpose}/test")

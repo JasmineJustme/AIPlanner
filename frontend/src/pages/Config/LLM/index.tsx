@@ -10,7 +10,7 @@ import {
   Button,
   message,
   Typography,
-  Switch, // Add Switch
+  Switch,
   Space,
 } from 'antd';
 import {
@@ -71,13 +71,14 @@ function LLMTab({
           const isConfigured = !!(config.api_key && config.api_endpoint);
           setHasConfig(isConfigured);
 
-          // 如果已配置，默认收起；否则展开
           setConfigExpanded(!isConfigured);
 
           if (!isConfigured && !notifiedRef.current) {
               message.info('模型尚未配置，请填写相应内容');
               notifiedRef.current = true;
           }
+          setUseTemperature((config.temperature_enabled as boolean | undefined) ?? true);
+          setUseTopP((config.top_p_enabled as boolean | undefined) ?? true);
           form.setFieldsValue({
             provider: config.provider ?? 'openai',
             model_name: config.model_name ?? '',
@@ -112,7 +113,9 @@ function LLMTab({
         api_endpoint: values.api_endpoint,
         api_key: values.api_key,
         temperature: values.temperature,
+        temperature_enabled: useTemperature,
         top_p: values.top_p,
+        top_p_enabled: useTopP,
         max_tokens: values.max_tokens,
         prompt_template: values.prompt_template,
       });
@@ -147,7 +150,9 @@ function LLMTab({
         api_endpoint: values.api_endpoint,
         api_key: values.api_key,
         temperature: values.temperature,
+        temperature_enabled: useTemperature,
         top_p: values.top_p,
+        top_p_enabled: useTopP,
         max_tokens: values.max_tokens,
         prompt_template: values.prompt_template,
       });

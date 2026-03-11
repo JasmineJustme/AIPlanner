@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.engine.orchestrator import orchestrator
 from app.models import Todo, SchedulePlan, ScheduleTask
+from app.services.sse_manager import sse_manager
 from loguru import logger
 
 router = APIRouter(prefix="/orchestration", tags=["orchestration"])
@@ -22,11 +23,26 @@ _STORE_FILE = _DATA_DIR / "orchestrations.json"
 _orchestration_store: dict[str, dict] = {}
 
 
+def _prune_cancelled_orchestrations() -> list[str]:
+    removed_ids = [
+        orch_id
+        for orch_id, entry in list(_orchestration_store.items())
+        if entry.get("status") == "cancelled"
+    ]
+    for orch_id in removed_ids:
+        _orchestration_store.pop(orch_id, None)
+    return removed_ids
+
+
 def _load_store():
     global _orchestration_store
     if _STORE_FILE.exists():
         try:
             _orchestration_store = _json.loads(_STORE_FILE.read_text(encoding="utf-8"))
+            removed_ids = _prune_cancelled_orchestrations()
+            if removed_ids:
+                logger.info(f"Pruned {len(removed_ids)} cancelled orchestrations while loading store")
+                _save_store()
             logger.info(f"Loaded {len(_orchestration_store)} orchestrations from {_STORE_FILE}")
             return
         except Exception as e:
@@ -35,6 +51,9 @@ def _load_store():
 
 
 def _save_store():
+    removed_ids = _prune_cancelled_orchestrations()
+    if removed_ids:
+        logger.info(f"Pruned {len(removed_ids)} cancelled orchestrations before saving store")
     try:
         _STORE_FILE.write_text(
             _json.dumps(_orchestration_store, ensure_ascii=False, indent=2, default=str),
@@ -44,7 +63,16 @@ def _save_store():
         logger.error(f"Failed to save orchestration store: {e}")
 
 
-_load_store()
+async def _broadcast_orchestration_complete(orch_id: str, status: str, error: str | None = None, removed: bool = False) -> None:
+    await sse_manager.broadcast(
+        "orchestration_complete",
+        {
+            "orch_id": orch_id,
+            "status": status,
+            "error": error,
+            "removed": removed,
+        },
+    )
 
 
 class SubmitPayload(BaseModel):
@@ -157,6 +185,8 @@ MOCK_DETAILS = {
     },
 }
 
+_load_store()
+
 if not _orchestration_store:
     for _k, _v in MOCK_DETAILS.items():
         _orchestration_store[_k] = _v
@@ -249,6 +279,31 @@ def _parse_schedule_datetime(value: str | None) -> datetime:
         return datetime.fromisoformat(normalized).replace(microsecond=0)
     except ValueError:
         return datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+
+
+async def _cancel_schedule_for_orchestration(db: AsyncSession, orch_id: str) -> None:
+    existing_task_result = await db.execute(
+        select(ScheduleTask).where(ScheduleTask.orchestration_id == orch_id)
+    )
+    schedule_tasks = existing_task_result.scalars().all()
+    if not schedule_tasks:
+        return
+
+    plan_ids = {task.plan_id for task in schedule_tasks if task.plan_id}
+    now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+
+    for task in schedule_tasks:
+        task.status = "cancelled"
+        task.error_message = task.error_message or "编排已取消"
+        if task.completed_at is None:
+            task.completed_at = now
+
+    if plan_ids:
+        plans_result = await db.execute(select(SchedulePlan).where(SchedulePlan.id.in_(plan_ids)))
+        for plan in plans_result.scalars().all():
+            plan.status = "cancelled"
+
+    await db.flush()
 
 
 async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entry: dict) -> None:
@@ -398,6 +453,7 @@ async def submit_orchestration(
 
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
+    await _broadcast_orchestration_complete(orch_id, entry["status"], entry.get("error"))
     return {
         "code": 200,
         "message": "success",
@@ -409,6 +465,8 @@ async def submit_orchestration(
 async def list_pending_orchestrations(
     db: AsyncSession = Depends(get_db),
 ):
+    if _prune_cancelled_orchestrations():
+        _save_store()
     items = []
     for orch_id, entry in _orchestration_store.items():
         plan = entry.get("plan") or {}
@@ -551,10 +609,15 @@ async def cancel_orchestration(
     entry = _orchestration_store.get(orch_id)
     if not entry:
         raise HTTPException(status_code=404, detail="编排不存在")
-    entry["status"] = "cancelled"
-    await sync_todos_for_orchestration(db, orch_id, entry)
+
+    cancelled_entry = dict(entry)
+    cancelled_entry["status"] = "cancelled"
+    await sync_todos_for_orchestration(db, orch_id, cancelled_entry)
+    await _cancel_schedule_for_orchestration(db, orch_id)
+    _orchestration_store.pop(orch_id, None)
     _save_store()
-    return {"code": 200, "message": "success", "data": {"status": "cancelled"}}
+    await _broadcast_orchestration_complete(orch_id, "cancelled", removed=True)
+    return {"code": 200, "message": "success", "data": {"status": "cancelled", "removed": True}}
 
 
 @router.post("/{orch_id}/retry")
@@ -607,6 +670,7 @@ async def retry_orchestration(
 
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
+    await _broadcast_orchestration_complete(orch_id, entry["status"], entry.get("error"))
     return {
         "code": 200,
         "message": "success",

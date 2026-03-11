@@ -53,7 +53,9 @@ export interface LLMConfig {
   api_endpoint: string;
   api_key: string;
   temperature: number;
+  temperature_enabled: boolean;
   top_p: number;
+  top_p_enabled: boolean;
   max_tokens: number;
   prompt_template: string;
   prompt_version: number;

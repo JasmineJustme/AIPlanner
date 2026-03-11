@@ -37,13 +37,16 @@ class LLMClient:
             logger.info("Normalized LLM endpoint from '{}' to '{}'", config.api_endpoint, endpoint)
 
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
+        prefs = config.user_preferences or {}
         payload = {
             "model": config.model_name,
             "messages": messages,
-            "temperature": config.temperature,
-            "top_p": config.top_p,
             "max_tokens": config.max_tokens,
         }
+        if prefs.get("temperature_enabled", True):
+            payload["temperature"] = config.temperature
+        if prefs.get("top_p_enabled", True):
+            payload["top_p"] = config.top_p
         try:
             response = await self._client.post(
                 endpoint, json=payload, headers=headers

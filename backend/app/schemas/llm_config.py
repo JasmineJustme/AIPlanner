@@ -9,7 +9,9 @@ class LLMConfigUpdate(BaseModel):
     api_endpoint: Optional[str] = None
     api_key: Optional[str] = None
     temperature: Optional[float] = None
+    temperature_enabled: Optional[bool] = None
     top_p: Optional[float] = None
+    top_p_enabled: Optional[bool] = None
     max_tokens: Optional[int] = None
     prompt_template: Optional[str] = None
     cost_alert_threshold: Optional[float] = None
@@ -24,7 +26,9 @@ class LLMConfigResponse(BaseModel):
     api_endpoint: str | None = None
     api_key: str | None = None
     temperature: float = 0.7
+    temperature_enabled: bool = True
     top_p: float = 1.0
+    top_p_enabled: bool = True
     max_tokens: int = 4096
     prompt_template: str = ""
     cost_alert_threshold: float | None = None
