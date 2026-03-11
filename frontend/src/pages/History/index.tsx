@@ -1,15 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Button,
-  Card,
   DatePicker,
   Input,
   Select,
   Space,
   Table,
   Typography,
-  Drawer,
   message,
 } from 'antd';
 import { ExportOutlined, BarChartOutlined } from '@ant-design/icons';
@@ -34,13 +32,19 @@ const STATUS_OPTIONS = Object.entries(STATUS_TAG_MAP).map(([k, v]) => ({
 
 interface HistoryItem {
   id?: string;
+  task_id?: string;
+  agent_id?: string;
   agent_name?: string;
+  wagent_id?: string;
   wagent_name?: string;
   status?: string;
   input_params?: Record<string, unknown> | string;
   output_result?: unknown;
+  error_message?: string;
   execution_log?: string;
+  tokens_used?: number;
   started_at?: string;
+  completed_at?: string;
   duration_ms?: number;
   [key: string]: unknown;
 }
@@ -54,6 +58,19 @@ function extractData<T>(res: unknown): T | null {
 function truncate(str: string, len: number) {
   if (!str || str.length <= len) return str ?? '-';
   return str.slice(0, len) + '...';
+}
+
+function formatInputParamsPreview(inputParams?: Record<string, unknown> | string) {
+  if (inputParams === null || inputParams === undefined) return '-';
+  if (typeof inputParams === 'string') {
+    const trimmed = inputParams.trim();
+    if (!trimmed) return '-';
+    return truncate(trimmed, 50);
+  }
+
+  const keys = Object.keys(inputParams);
+  if (keys.length === 0) return '{}';
+  return truncate(JSON.stringify(inputParams, null, 0), 50);
 }
 
 export default function HistoryPage() {
@@ -70,10 +87,14 @@ export default function HistoryPage() {
     keyword?: string;
     status?: string;
   }>({});
-  const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
-  const [detailRecord, setDetailRecord] = useState<HistoryItem | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailRecords, setDetailRecords] = useState<Record<string, HistoryItem>>({});
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
+
+  const formatTokenCount = useCallback((value?: number) => {
+    if (!value) return '0';
+    return new Intl.NumberFormat('zh-CN').format(value);
+  }, []);
 
   const loadHistory = async () => {
     setLoading(true);
@@ -103,21 +124,21 @@ export default function HistoryPage() {
     loadHistory();
   }, [data.page, data.size, filters.status, filters.start_time, filters.end_time, filters.keyword]);
 
-  const handleViewDetail = async (record: HistoryItem) => {
-    setDetailRecord(record);
-    setDetailDrawerOpen(true);
-    if (!record.id) return;
-    setDetailLoading(true);
+  const loadHistoryDetail = useCallback(async (record: HistoryItem) => {
+    if (!record.id || detailRecords[record.id]) return;
+    setDetailLoadingId(record.id);
     try {
       const res = await getHistoryDetail(record.id);
       const full = extractData<HistoryItem>(res);
-      if (full) setDetailRecord(full);
+      if (full?.id) {
+        setDetailRecords((current) => ({ ...current, [full.id as string]: full }));
+      }
     } catch {
       message.error('获取详情失败');
     } finally {
-      setDetailLoading(false);
+      setDetailLoadingId((current) => (current === record.id ? null : current));
     }
-  };
+  }, [detailRecords]);
 
   const handleExport = async () => {
     setExportLoading(true);
@@ -157,10 +178,7 @@ export default function HistoryPage() {
       title: '输入参数',
       key: 'input_params',
       ellipsis: true,
-      render: (_, r) => {
-        const raw = typeof r.input_params === 'string' ? r.input_params : JSON.stringify(r.input_params ?? {});
-        return truncate(raw, 50);
-      },
+      render: (_, r) => formatInputParamsPreview(r.input_params),
     },
     {
       title: '开始时间',
@@ -176,46 +194,80 @@ export default function HistoryPage() {
       width: 90,
       render: (ms: number) => formatDuration(ms),
     },
-    {
-      title: '操作',
-      key: 'action',
-      width: 100,
-      render: (_, record) => (
-        <Button type="link" size="small" onClick={() => handleViewDetail(record)}>
-          查看详情
-        </Button>
-      ),
-    },
   ];
 
-  const expandedRowRender = (record: HistoryItem) => (
-    <div style={{ padding: '8px 24px' }}>
-      <Card size="small" title="输入参数" style={{ marginBottom: 12 }}>
-        <JsonViewer data={record.input_params ?? {}} />
-      </Card>
-      <Card size="small" title="输出结果" style={{ marginBottom: 12 }}>
-        <JsonViewer data={record.output_result ?? {}} />
-      </Card>
-      <Card size="small" title="执行日志">
-        <pre
-          style={{
-            margin: 0,
-            padding: 12,
-            background: '#f5f5f5',
-            borderRadius: 4,
-            overflow: 'auto',
-            fontSize: 12,
-            maxHeight: 200,
-          }}
-        >
-          {record.execution_log ?? '-'}
-        </pre>
-      </Card>
-      <Typography.Text type="secondary">
-        耗时: {formatDuration(record.duration_ms)}
-      </Typography.Text>
-    </div>
-  );
+  const expandedRowRender = (record: HistoryItem) => {
+    const detail = (record.id && detailRecords[record.id]) || record;
+    const isLoading = detailLoadingId === record.id;
+
+    return (
+      <div style={{ padding: '8px 24px' }}>
+        <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+          <Typography.Text><strong>任务ID：</strong>{detail.task_id || '-'}</Typography.Text>
+          <Typography.Text><strong>执行器：</strong>{detail.wagent_name || detail.agent_name || '-'}</Typography.Text>
+          <Typography.Text><strong>状态：</strong>{detail.status ? <StatusTag status={detail.status} /> : '-'}</Typography.Text>
+        </div>
+        <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+          <Typography.Text><strong>开始时间：</strong>{formatDate(detail.started_at)}</Typography.Text>
+          <Typography.Text><strong>完成时间：</strong>{formatDate(detail.completed_at)}</Typography.Text>
+          <Typography.Text><strong>耗时：</strong>{formatDuration(detail.duration_ms)}</Typography.Text>
+          <Typography.Text><strong>Token 使用量：</strong>{formatTokenCount(detail.tokens_used)}</Typography.Text>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <strong>输入参数：</strong>
+          <JsonViewer data={detail.input_params ?? {}} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <strong>输出结果：</strong>
+          <JsonViewer data={detail.output_result ?? {}} />
+        </div>
+        {detail.execution_log && (
+          <div style={{ marginBottom: 12 }}>
+            <strong>执行日志：</strong>
+            <pre
+              style={{
+                background: '#f5f5f5',
+                padding: 12,
+                borderRadius: 4,
+                fontSize: 12,
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {detail.execution_log}
+            </pre>
+          </div>
+        )}
+        {detail.error_message && (
+          <div>
+            <strong>错误信息：</strong>
+            <pre
+              style={{
+                background: '#fff2f0',
+                padding: 12,
+                borderRadius: 4,
+                fontSize: 12,
+                color: '#cf1322',
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {detail.error_message}
+            </pre>
+          </div>
+        )}
+        {isLoading && (
+          <Typography.Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
+            正在加载完整执行详情...
+          </Typography.Text>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -273,6 +325,11 @@ export default function HistoryPage() {
         expandable={{
           expandedRowRender,
           rowExpandable: () => true,
+          onExpand: (expanded, record) => {
+            if (expanded) {
+              void loadHistoryDetail(record);
+            }
+          },
         }}
         pagination={{
           current: data.page,
@@ -283,44 +340,6 @@ export default function HistoryPage() {
           onChange: (p, s) => setData((d) => ({ ...d, page: p, size: s ?? 20 })),
         }}
       />
-
-      <Drawer
-        title="执行详情"
-        open={detailDrawerOpen}
-        onClose={() => setDetailDrawerOpen(false)}
-        width={560}
-      >
-        {detailLoading ? (
-          <div>加载中...</div>
-        ) : detailRecord ? (
-          <div>
-            <Card size="small" title="输入参数" style={{ marginBottom: 12 }}>
-              <JsonViewer data={detailRecord.input_params ?? {}} />
-            </Card>
-            <Card size="small" title="输出结果" style={{ marginBottom: 12 }}>
-              <JsonViewer data={detailRecord.output_result ?? {}} />
-            </Card>
-            <Card size="small" title="执行日志">
-              <pre
-                style={{
-                  margin: 0,
-                  padding: 12,
-                  background: '#f5f5f5',
-                  borderRadius: 4,
-                  overflow: 'auto',
-                  fontSize: 12,
-                  maxHeight: 300,
-                }}
-              >
-                {detailRecord.execution_log ?? '-'}
-              </pre>
-            </Card>
-            <Typography.Text type="secondary">
-              耗时: {formatDuration(detailRecord.duration_ms)}
-            </Typography.Text>
-          </div>
-        ) : null}
-      </Drawer>
     </div>
   );
 }

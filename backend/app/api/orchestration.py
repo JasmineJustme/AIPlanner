@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.engine.orchestrator import orchestrator
-from app.models import Todo, SchedulePlan, ScheduleTask
+from app.models import Todo, SchedulePlan, ScheduleTask, Agent, WAgent
 from app.services.sse_manager import sse_manager
 from loguru import logger
 
@@ -359,6 +359,54 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
     await db.flush()
 
 
+def _build_recommended_target(target_type: str, target_id: str | None, target_name: str | None) -> dict | None:
+    if not target_id:
+        return None
+    return {
+        "id": target_id,
+        "name": target_name or "",
+        "is_enabled": True,
+        "type": target_type,
+    }
+
+
+def _snapshot_llm_recommendation(entry: dict) -> None:
+    if entry.get("llm_recommended_id") and entry.get("llm_recommended_type"):
+        return
+
+    plan = entry.get("plan") or {}
+    suggested_agent = entry.get("suggested_agent")
+    suggested_wagent = entry.get("suggested_wagent")
+    plan_type = plan.get("plan_type")
+    recommended_id = plan.get("recommended_id")
+    recommended_name = plan.get("recommended_name")
+
+    if suggested_agent and suggested_agent.get("id"):
+        entry["llm_recommended_id"] = suggested_agent.get("id")
+        entry["llm_recommended_name"] = suggested_agent.get("name") or recommended_name or ""
+        entry["llm_recommended_type"] = "agent"
+        return
+    if suggested_wagent and suggested_wagent.get("id"):
+        entry["llm_recommended_id"] = suggested_wagent.get("id")
+        entry["llm_recommended_name"] = suggested_wagent.get("name") or recommended_name or ""
+        entry["llm_recommended_type"] = "wagent"
+        return
+    if recommended_id and plan_type in {"agent", "wagent", "new_wagent"}:
+        entry["llm_recommended_id"] = recommended_id
+        entry["llm_recommended_name"] = recommended_name or ""
+        entry["llm_recommended_type"] = "wagent" if plan_type in {"wagent", "new_wagent"} else "agent"
+
+
+def _apply_selected_executor(entry: dict, plan_type: str, recommended_id: str | None, recommended_name: str | None) -> None:
+    plan = entry.get("plan") or {}
+    plan["plan_type"] = plan_type
+    plan["recommended_id"] = recommended_id or ""
+    plan["recommended_name"] = recommended_name or ""
+    entry["plan"] = plan
+    entry["suggested_agent"] = _build_recommended_target("agent", recommended_id, recommended_name) if plan_type == "agent" else None
+    entry["suggested_wagent"] = _build_recommended_target("wagent", recommended_id, recommended_name) if plan_type in {"wagent", "new_wagent"} else None
+
+
 @router.post("/submit")
 async def submit_orchestration(
     payload: SubmitPayload,
@@ -440,11 +488,12 @@ async def submit_orchestration(
             if plan and plan.get("plan_type") in ("agent",):
                 rec_id = plan.get("recommended_id")
                 rec_name = plan.get("recommended_name", "")
-                entry["suggested_agent"] = {"id": rec_id, "name": rec_name, "is_enabled": True} if rec_id else None
+                entry["suggested_agent"] = {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "agent"} if rec_id else None
             elif plan and plan.get("plan_type") in ("wagent", "new_wagent"):
                 rec_id = plan.get("recommended_id")
                 rec_name = plan.get("recommended_name", "")
-                entry["suggested_wagent"] = {"id": rec_id, "name": rec_name, "is_enabled": True} if rec_id else None
+                entry["suggested_wagent"] = {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "wagent"} if rec_id else None
+            _snapshot_llm_recommendation(entry)
 
     except Exception as e:
         logger.error(f"Orchestration failed for {orch_id}: {e}")
@@ -503,6 +552,7 @@ async def get_orchestration_detail(
     entry = _orchestration_store.get(orch_id)
     if not entry:
         raise HTTPException(status_code=404, detail="编排不存在")
+    _snapshot_llm_recommendation(entry)
     return {
         "code": 200,
         "message": "success",
@@ -567,11 +617,27 @@ async def modify_agent(
     entry = _orchestration_store.get(orch_id)
     if not entry:
         raise HTTPException(status_code=404, detail="编排不存在")
-    plan = entry.get("plan") or {}
-    plan["plan_type"] = payload.get("plan_type", plan.get("plan_type"))
-    plan["recommended_id"] = payload.get("recommended_id", plan.get("recommended_id"))
-    plan["recommended_name"] = payload.get("recommended_name", plan.get("recommended_name"))
-    entry["plan"] = plan
+
+    _snapshot_llm_recommendation(entry)
+
+    plan_type = payload.get("plan_type") or (entry.get("plan") or {}).get("plan_type") or "agent"
+    recommended_id = payload.get("recommended_id")
+    selected_name = payload.get("recommended_name")
+
+    if plan_type == "agent":
+        target = await db.get(Agent, recommended_id) if recommended_id else None
+        if recommended_id and not target:
+            raise HTTPException(status_code=404, detail="Agent 不存在")
+        selected_name = selected_name or (target.name if target else "")
+    elif plan_type in {"wagent", "new_wagent"}:
+        target = await db.get(WAgent, recommended_id) if recommended_id else None
+        if recommended_id and not target:
+            raise HTTPException(status_code=404, detail="W-Agent 不存在")
+        selected_name = selected_name or (target.name if target else "")
+    else:
+        raise HTTPException(status_code=400, detail="不支持的执行器类型")
+
+    _apply_selected_executor(entry, plan_type, recommended_id, selected_name)
     _save_store()
     return {"code": 200, "message": "success", "data": entry}
 
@@ -657,11 +723,12 @@ async def retry_orchestration(
             if plan and plan.get("plan_type") in ("agent",):
                 rec_id = plan.get("recommended_id")
                 rec_name = plan.get("recommended_name", "")
-                entry["suggested_agent"] = {"id": rec_id, "name": rec_name, "is_enabled": True} if rec_id else None
+                entry["suggested_agent"] = {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "agent"} if rec_id else None
             elif plan and plan.get("plan_type") in ("wagent", "new_wagent"):
                 rec_id = plan.get("recommended_id")
                 rec_name = plan.get("recommended_name", "")
-                entry["suggested_wagent"] = {"id": rec_id, "name": rec_name, "is_enabled": True} if rec_id else None
+                entry["suggested_wagent"] = {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "wagent"} if rec_id else None
+            _snapshot_llm_recommendation(entry)
 
     except Exception as e:
         logger.error(f"Orchestration retry failed for {orch_id}: {e}")

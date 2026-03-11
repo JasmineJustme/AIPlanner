@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   Tabs,
   Card,
@@ -8,6 +8,7 @@ import {
   InputNumber,
   Slider,
   Button,
+  Descriptions,
   message,
   Typography,
   Switch,
@@ -19,6 +20,7 @@ import {
   testLLMConfig,
   getLLMUsage,
 } from '@/api/config';
+import type { LLMUsageSummary } from '@/types/settings';
 
 const { Title, Text } = Typography;
 
@@ -52,13 +54,40 @@ function LLMTab({
   const [useTemperature, setUseTemperature] = useState(true);
   const [useTopP, setUseTopP] = useState(true);
 
-  const [usage, setUsage] = useState<Record<string, unknown> | null>(null);
+  const [usage, setUsage] = useState<LLMUsageSummary | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
   // Add ref to track notification state
   const notifiedRef = useRef(false);
+
+  const formatTokenCount = (value?: number) =>
+    new Intl.NumberFormat('zh-CN').format(value ?? 0);
+
+  const formatCurrency = (value?: number) =>
+    `¥${(value ?? 0).toFixed(4)}`;
+
+  const loadUsage = useCallback(async () => {
+    setUsageLoading(true);
+    try {
+      const res = await getLLMUsage(purpose);
+      const body = (res as { data: unknown }).data;
+      const u = (body as { data?: Partial<LLMUsageSummary> })?.data ?? body;
+      const usageData = u as Partial<LLMUsageSummary> | undefined;
+      setUsage({
+        total_tokens_used: usageData?.total_tokens_used ?? 0,
+        total_cost: usageData?.total_cost ?? 0,
+        prompt_version: usageData?.prompt_version ?? 1,
+      });
+    } catch {
+      setUsage(null);
+    } finally {
+      setUsageLoading(false);
+    }
+  }, [purpose]);
 
   useEffect(() => {
       // Reset notification state when purpose changes
       notifiedRef.current = false;
+      setUsage(null);
   }, [purpose]);
 
   useEffect(() => {
@@ -77,6 +106,11 @@ function LLMTab({
               message.info('模型尚未配置，请填写相应内容');
               notifiedRef.current = true;
           }
+          if (!isConfigured) {
+            setUsage(null);
+          } else {
+            loadUsage();
+          }
           setUseTemperature((config.temperature_enabled as boolean | undefined) ?? true);
           setUseTopP((config.top_p_enabled as boolean | undefined) ?? true);
           form.setFieldsValue({
@@ -92,17 +126,7 @@ function LLMTab({
         }
       })
       .catch(() => message.error('加载失败'));
-  }, [purpose, form]);
-
-  const loadUsage = () => {
-    getLLMUsage(purpose)
-      .then((res) => {
-        const body = (res as { data: unknown }).data;
-        const u = (body as { data?: Record<string, unknown> })?.data ?? body;
-        setUsage(u as Record<string, unknown>);
-      })
-      .catch(() => setUsage(null));
-  };
+  }, [purpose, form, loadUsage]);
 
   const onFinish = async (values: Record<string, unknown>) => {
     setLoading(true);
@@ -122,6 +146,7 @@ function LLMTab({
       message.success('保存成功');
       setHasConfig(true);
       setConfigExpanded(false); // Collapse on successful save
+      await loadUsage();
     } catch {
       message.error('保存失败');
     } finally {
@@ -277,13 +302,21 @@ function LLMTab({
 
       {hasConfig && (
         <Card title="使用统计" style={{ marginTop: 16 }}>
-          <Button size="small" onClick={loadUsage} style={{ marginBottom: 8 }}>
+          <Button size="small" onClick={loadUsage} style={{ marginBottom: 12 }} loading={usageLoading}>
             刷新统计
           </Button>
           {usage ? (
-            <pre style={{ margin: 0, fontSize: 12 }}>
-              {JSON.stringify(usage, null, 2)}
-            </pre>
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="总 Token 使用量">
+                {formatTokenCount(usage.total_tokens_used)}
+              </Descriptions.Item>
+              <Descriptions.Item label="累计费用估算">
+                {formatCurrency(usage.total_cost)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Prompt 版本">
+                v{usage.prompt_version}
+              </Descriptions.Item>
+            </Descriptions>
           ) : (
             <Text type="secondary">暂无使用数据</Text>
           )}

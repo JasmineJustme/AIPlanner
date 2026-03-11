@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import ScheduleTask, SchedulePlan, Agent, WAgent
+from app.models import ScheduleTask, SchedulePlan, Agent, WAgent, Todo
 
 router = APIRouter(prefix="/scheduling", tags=["scheduling"])
 
@@ -13,11 +13,29 @@ def _now_local_naive() -> datetime:
     return datetime.now().replace(microsecond=0)
 
 
-def _task_to_dict(t: ScheduleTask, agent_name: str | None = None, plan_name: str | None = None) -> dict:
+def _resolve_task_title(t: ScheduleTask, todo_titles_by_orch: dict[str, list[str]], plan_name: str | None = None, agent_name: str | None = None) -> str:
+    titles = todo_titles_by_orch.get(t.orchestration_id, [])
+    first_title = next((title.strip() for title in titles if isinstance(title, str) and title.strip()), "")
+    if first_title:
+        return first_title
+    if plan_name:
+        return plan_name
+    if agent_name:
+        return agent_name
+    return f"Task {t.id[:8]}"
+
+
+def _task_to_dict(
+    t: ScheduleTask,
+    agent_name: str | None = None,
+    plan_name: str | None = None,
+    task_title: str | None = None,
+) -> dict:
     return {
         "id": t.id,
         "plan_id": t.plan_id,
         "plan_name": plan_name,
+        "task_title": task_title,
         "orchestration_id": t.orchestration_id,
         "agent_id": t.agent_id,
         "wagent_id": t.wagent_id,
@@ -83,6 +101,13 @@ async def list_schedule_tasks(
         for p in plans_result.scalars().all():
             plans[p.id] = p.name
 
+    orchestration_ids = [t.orchestration_id for t in items if t.orchestration_id]
+    todo_titles_by_orch: dict[str, list[str]] = {}
+    if orchestration_ids:
+        todo_result = await db.execute(select(Todo).where(Todo.orchestration_id.in_(orchestration_ids)))
+        for todo in todo_result.scalars().all():
+            todo_titles_by_orch.setdefault(todo.orchestration_id or "", []).append(todo.title)
+
     agent_ids = [t.agent_id for t in items if t.agent_id]
     wagent_ids = [t.wagent_id for t in items if t.wagent_id]
     agents_map = {}
@@ -100,6 +125,12 @@ async def list_schedule_tasks(
             t,
             agent_name=agents_map.get(t.agent_id or t.wagent_id or ""),
             plan_name=plans.get(t.plan_id),
+            task_title=_resolve_task_title(
+                t,
+                todo_titles_by_orch,
+                plan_name=plans.get(t.plan_id),
+                agent_name=agents_map.get(t.agent_id or t.wagent_id or ""),
+            ),
         )
         for t in items
     ]
@@ -126,7 +157,20 @@ async def get_task_detail(
     if t.plan_id:
         p = await db.get(SchedulePlan, t.plan_id)
         plan_name = p.name if p else None
-    return {"code": 200, "message": "success", "data": _task_to_dict(t, agent_name=agent_name, plan_name=plan_name)}
+    todo_titles_by_orch: dict[str, list[str]] = {}
+    if t.orchestration_id:
+        todo_result = await db.execute(select(Todo).where(Todo.orchestration_id == t.orchestration_id))
+        todo_titles_by_orch[t.orchestration_id] = [todo.title for todo in todo_result.scalars().all()]
+    return {
+        "code": 200,
+        "message": "success",
+        "data": _task_to_dict(
+            t,
+            agent_name=agent_name,
+            plan_name=plan_name,
+            task_title=_resolve_task_title(t, todo_titles_by_orch, plan_name=plan_name, agent_name=agent_name),
+        ),
+    }
 
 
 @router.post("/plans/{plan_id}/pause")
@@ -179,6 +223,13 @@ async def get_gantt_data(
     result = await db.execute(q)
     items = result.scalars().all()
 
+    orchestration_ids = [t.orchestration_id for t in items if t.orchestration_id]
+    todo_titles_by_orch: dict[str, list[str]] = {}
+    if orchestration_ids:
+        todo_result = await db.execute(select(Todo).where(Todo.orchestration_id.in_(orchestration_ids)))
+        for todo in todo_result.scalars().all():
+            todo_titles_by_orch.setdefault(todo.orchestration_id or "", []).append(todo.title)
+
     agent_ids = [t.agent_id for t in items if t.agent_id]
     wagent_ids = [t.wagent_id for t in items if t.wagent_id]
     agents_map = {}
@@ -191,9 +242,17 @@ async def get_gantt_data(
         for w in wagents_result.scalars().all():
             agents_map[w.id] = w.name
 
+    plan_names = {}
+    if items:
+        plan_ids = list({t.plan_id for t in items if t.plan_id})
+        plans_result = await db.execute(select(SchedulePlan).where(SchedulePlan.id.in_(plan_ids)))
+        for p in plans_result.scalars().all():
+            plan_names[p.id] = p.name
+
     tasks = []
     for t in items:
-        name = agents_map.get(t.agent_id or t.wagent_id or "", f"Task {t.id[:8]}")
+        resolved_agent_name = agents_map.get(t.agent_id or t.wagent_id or "")
+        name = _resolve_task_title(t, todo_titles_by_orch, plan_name=plan_names.get(t.plan_id), agent_name=resolved_agent_name)
         start = t.scheduled_at
         end = t.completed_at or t.started_at or t.scheduled_at
         if end == start and start:
@@ -202,6 +261,7 @@ async def get_gantt_data(
         tasks.append({
             "id": t.id,
             "name": name,
+            "task_title": name,
             "start": start.isoformat() if start else None,
             "end": end.isoformat() if end else None,
             "status": t.status,
@@ -235,13 +295,30 @@ async def delay_task(
     task = await db.get(ScheduleTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    minutes = payload.get("minutes", 30)
-    task.scheduled_at = _now_local_naive() + timedelta(minutes=minutes)
+    minutes = int(payload.get("minutes", 30) or 30)
+    now = _now_local_naive()
+    base_time = task.scheduled_at if task.scheduled_at and task.scheduled_at > now else now
+    task.scheduled_at = base_time + timedelta(minutes=minutes)
     task.status = "pending"
     task.confirm_action = "delayed"
     task.confirm_deadline = None
+
+    if task.orchestration_id:
+        from app.api.orchestration import get_orchestration_entry, _normalize_plan_time_value, _save_store
+
+        entry = get_orchestration_entry(task.orchestration_id)
+        if entry:
+            plan = entry.get("plan") or {}
+            plan["start_time"] = _normalize_plan_time_value(task.scheduled_at.isoformat())
+            entry["plan"] = plan
+            _save_store()
+
     await db.flush()
-    return {"code": 200, "message": "success", "data": {"status": "delayed"}}
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {"status": "delayed", "scheduled_at": task.scheduled_at.isoformat()},
+    }
 
 
 @router.post("/tasks/{task_id}/skip")

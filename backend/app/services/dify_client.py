@@ -24,6 +24,25 @@ class DifyClient:
             return url[: -len("/run")] + "/workflows/run"
         return url + "/workflows/run"
 
+    @staticmethod
+    def _validate_agent_response(result: dict) -> dict:
+        data = result.get("data") if isinstance(result, dict) else None
+        status = data.get("status") if isinstance(data, dict) else None
+        if status == "succeeded":
+            return result
+
+        error_message = None
+        if isinstance(data, dict):
+            error_message = data.get("error") or data.get("message")
+        if not error_message and isinstance(result, dict):
+            error_message = result.get("error") or result.get("message")
+
+        status_text = status or "unknown"
+        detail = f"Dify Agent execution not completed: status={status_text}"
+        if error_message:
+            detail = f"{detail}, error={error_message}"
+        raise ValueError(detail)
+
     async def call_agent(self, endpoint: str, api_key: str, inputs: dict, timeout: int = 300) -> dict:
         """Call a configured Dify workflow for Agent execution."""
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -32,7 +51,7 @@ class DifyClient:
         try:
             response = await self._client.post(request_url, json=payload, headers=headers, timeout=timeout)
             response.raise_for_status()
-            return response.json()
+            return self._validate_agent_response(response.json())
         except Exception as e:
             logger.error(f"Dify Agent call failed: {e}")
             raise

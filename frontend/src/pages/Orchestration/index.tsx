@@ -66,8 +66,11 @@ interface OrchestrationDetail {
   orch_id: string;
   status: string;
   todos: Todo[];
-  suggested_agent?: Agent | null;
-  suggested_wagent?: WAgent | null;
+  suggested_agent?: Agent | ({ id: string; name: string; is_enabled?: boolean; type?: string }) | null;
+  suggested_wagent?: WAgent | ({ id: string; name: string; is_enabled?: boolean; type?: string }) | null;
+  llm_recommended_id?: string | null;
+  llm_recommended_name?: string | null;
+  llm_recommended_type?: 'agent' | 'wagent' | null;
   plan?: {
     plan_type: 'agent' | 'wagent' | 'new_wagent';
     recommended_id?: string;
@@ -96,6 +99,8 @@ function OrchestrationCard({
   orch,
   onRefreshList,
   onConfirmed,
+  onRetryStarted,
+  onAgentModified,
   selectable,
   checked,
   onCheck,
@@ -103,6 +108,8 @@ function OrchestrationCard({
   orch: OrchestrationItem;
   onRefreshList: () => void;
   onConfirmed?: () => void;
+  onRetryStarted?: (orch: OrchestrationItem) => Promise<void>;
+  onAgentModified?: (orchId: string, patch: Partial<OrchestrationItem>) => void;
   selectable?: boolean;
   checked?: boolean;
   onCheck?: (checked: boolean) => void;
@@ -116,31 +123,34 @@ function OrchestrationCard({
   const [wagents, setWAgents] = useState<WAgent[]>([]);
   const [form] = Form.useForm();
 
+  const applyDetail = useCallback((nextDetail: OrchestrationDetail | null) => {
+    setDetail(nextDetail);
+    if (!nextDetail) return;
+    const plan = nextDetail.plan;
+    const inputParams = plan?.input_params ?? {};
+    form.setFieldsValue({
+      ...inputParams,
+      priority: plan?.priority || 'medium',
+      estimated_duration_minutes: plan?.estimated_duration_minutes ?? 30,
+      start_time: plan?.start_time ? dayjs(plan.start_time) : null,
+      deadline: plan?.deadline ? dayjs(plan.deadline) : null,
+    });
+  }, [form]);
+
   const loadDetail = useCallback(async () => {
     setDetailLoading(true);
     try {
       const res = await getOrchestration(orch.orch_id);
       const data = (res as { data: { data?: OrchestrationDetail } }).data;
       const d = (data?.data ?? data) as OrchestrationDetail | null;
-      setDetail(d || null);
-      if (d) {
-        const plan = d.plan;
-        const inputParams = plan?.input_params ?? {};
-        form.setFieldsValue({
-          ...inputParams,
-          priority: plan?.priority || 'medium',
-          estimated_duration_minutes: plan?.estimated_duration_minutes ?? 30,
-          start_time: plan?.start_time ? dayjs(plan.start_time) : null,
-          deadline: plan?.deadline ? dayjs(plan.deadline) : null,
-        });
-      }
+      applyDetail(d || null);
     } catch {
       setDetail(null);
     } finally {
       setDetailLoading(false);
       setLoaded(true);
     }
-  }, [orch.orch_id, form]);
+  }, [applyDetail, orch.orch_id]);
 
   const handleExpandToggle = (keys: string | string[]) => {
     const active = Array.isArray(keys) ? keys : [keys];
@@ -198,13 +208,18 @@ function OrchestrationCard({
 
   const handleModifyAgent = async (agentId: string, type: 'agent' | 'wagent') => {
     try {
-      await modifyOrchestrationAgent(orch.orch_id, {
+      const res = await modifyOrchestrationAgent(orch.orch_id, {
         plan_type: type,
         recommended_id: agentId,
       });
+      const body = (res as { data: { data?: OrchestrationDetail } }).data;
+      const updated = (body?.data ?? body) as OrchestrationDetail | null;
       message.success('已修改');
       setAgentModalOpen(false);
-      loadDetail();
+      applyDetail(updated || null);
+      onAgentModified?.(orch.orch_id, {
+        recommended_name: updated?.plan?.recommended_name || updated?.suggested_agent?.name || updated?.suggested_wagent?.name,
+      });
     } catch (e) {
       message.error((e as Error).message || '修改失败');
     }
@@ -237,20 +252,10 @@ function OrchestrationCard({
   };
 
   const handleRetry = async () => {
+    if (!onRetryStarted) return;
     setRetrying(true);
     try {
-      const res = await retryOrchestration(orch.orch_id);
-      const body = (res as { data: { data?: { status?: string; error?: string } } }).data;
-      const result = (body?.data ?? body) as { status?: string; error?: string } | undefined;
-      if (result?.error) {
-        message.error(`重新编排失败: ${result.error}`);
-      } else {
-        message.success('已重新提交编排');
-      }
-      onRefreshList();
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { detail?: string } }; message?: string };
-      message.error(err?.response?.data?.detail || err?.message || '重试失败');
+      await onRetryStarted(orch);
     } finally {
       setRetrying(false);
     }
@@ -275,13 +280,25 @@ function OrchestrationCard({
 
   const getReason = () => {
     if (!detail) return '';
-    return detail.llm_reason || detail.plan?.reason || '';
+    const selectedType = detail.plan?.plan_type === 'agent' ? 'agent' : 'wagent';
+    const selectedId = detail.plan?.recommended_id || detail.suggested_agent?.id || detail.suggested_wagent?.id;
+    const isUsingLLMRecommendation = !!selectedId
+      && selectedId === detail.llm_recommended_id
+      && selectedType === detail.llm_recommended_type;
+
+    if (isUsingLLMRecommendation) {
+      return detail.llm_reason || detail.plan?.reason || '';
+    }
+    return '该Agent由用户自行选择';
   };
 
   const getExecutorLabel = () => {
     const planType = getPlanType();
     return planType === 'agent' ? 'Agent' : 'W-Agent';
   };
+
+  const isLLMRecommendedOption = (id: string, type: 'agent' | 'wagent') =>
+    detail?.llm_recommended_id === id && detail?.llm_recommended_type === type;
 
   const formatPlanTime = (value?: string | null) => {
     if (!value) return '未设置';
@@ -590,7 +607,7 @@ function OrchestrationCard({
                 size="small"
                 onClick={() => handleModifyAgent(a.id, 'agent')}
               >
-                {a.name}
+                {a.name}{isLLMRecommendedOption(a.id, 'agent') ? '（推荐）' : ''}
               </Button>
             ))}
             {agents.length === 0 && <Text type="secondary"> 无</Text>}
@@ -604,7 +621,7 @@ function OrchestrationCard({
                 size="small"
                 onClick={() => handleModifyAgent(w.id, 'wagent')}
               >
-                {w.name}
+                {w.name}{isLLMRecommendedOption(w.id, 'wagent') ? '（推荐）' : ''}
               </Button>
             ))}
             {wagents.length === 0 && <Text type="secondary"> 无</Text>}
@@ -618,10 +635,53 @@ function OrchestrationCard({
 export default function OrchestrationPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('all');
   const [orchestrations, setOrchestrations] = useState<OrchestrationItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const { on, off } = useSSE();
   const loadPendingRef = useRef<(() => Promise<void>) | null>(null);
+
+  const patchOrchestration = useCallback((orchId: string, updater: (item: OrchestrationItem) => OrchestrationItem) => {
+    setOrchestrations((current) => current.map((item) => (item.orch_id === orchId ? updater(item) : item)));
+  }, []);
+
+  const handleAgentModified = useCallback((orchId: string, patch: Partial<OrchestrationItem>) => {
+    patchOrchestration(orchId, (item) => ({ ...item, ...patch }));
+  }, [patchOrchestration]);
+
+  const handleRetryStarted = useCallback(async (orch: OrchestrationItem) => {
+    const previous = { ...orch };
+    patchOrchestration(orch.orch_id, (item) => ({
+      ...item,
+      status: 'analyzing',
+      error: undefined,
+    }));
+
+    try {
+      const res = await retryOrchestration(orch.orch_id);
+      const body = (res as { data: { data?: { status?: string; error?: string } } }).data;
+      const result = (body?.data ?? body) as { status?: string; error?: string } | undefined;
+
+      if (result?.status) {
+        patchOrchestration(orch.orch_id, (item) => ({
+          ...item,
+          status: result.status ?? item.status,
+          error: result.error,
+        }));
+      }
+
+      if (result?.error) {
+        message.error(`重新编排失败: ${result.error}`);
+      } else {
+        message.success('已重新提交编排');
+      }
+      loadPendingRef.current?.();
+    } catch (e: unknown) {
+      patchOrchestration(orch.orch_id, () => previous);
+      const err = e as { response?: { data?: { detail?: string } }; message?: string };
+      message.error(err?.response?.data?.detail || err?.message || '重试失败');
+    }
+  }, [patchOrchestration]);
 
   const handleOrchestrationEvent = useCallback((payload: unknown) => {
     const event = payload as { orch_id?: string; status?: string; error?: string; removed?: boolean } | undefined;
@@ -738,6 +798,8 @@ export default function OrchestrationPage() {
                 orch={orch}
                 onRefreshList={loadPending}
                 onConfirmed={handleConfirmedNavigate}
+                onRetryStarted={handleRetryStarted}
+                onAgentModified={handleAgentModified}
                 selectable={isPending}
                 checked={isPending ? selectedIds.has(orch.orch_id) : false}
                 onCheck={(c) => toggleSelect(orch.orch_id, c)}
@@ -772,7 +834,7 @@ export default function OrchestrationPage() {
   }
 
   const items = [
-      { key: 'all', label: '全部模块', children: renderList('all') },
+      { key: 'all', label: '全部', children: renderList('all') },
       { key: 'analyzing', label: '分析中', children: renderList('analyzing') },
       { key: 'pending_confirm', label: '待确认', children: renderList('pending_confirm') },
   ];
@@ -783,7 +845,7 @@ export default function OrchestrationPage() {
         <Title level={3} style={{ margin: 0 }}>智能编排</Title>
         <Button onClick={loadPending}>刷新</Button>
       </div>
-      <Tabs defaultActiveKey="all" items={items} />
+      <Tabs activeKey={activeTab} onChange={setActiveTab} items={items} />
     </div>
   );
 }

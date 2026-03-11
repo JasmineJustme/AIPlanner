@@ -14,6 +14,7 @@ export interface ScheduleTask {
   id: string;
   plan_id: string;
   plan_name?: string;
+  task_title?: string;
   orchestration_id: string;
   agent_id?: string;
   wagent_id?: string;

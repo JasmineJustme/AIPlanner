@@ -124,6 +124,13 @@ export default function SchedulingPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [planFilter, setPlanFilter] = useState<string>('');
 
+  const getTaskDisplayName = useCallback((task: Pick<ScheduleTask, 'task_title' | 'plan_name' | 'agent_name' | 'agent_id' | 'wagent_id' | 'id'>) => {
+    return task.task_title
+      || task.plan_name
+      || task.agent_name
+      || (task.agent_id ? `Agent ${task.agent_id.slice(0, 8)}` : task.wagent_id ? `W-Agent ${task.wagent_id.slice(0, 8)}` : `Task ${task.id.slice(0, 8)}`);
+  }, []);
+
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
@@ -253,8 +260,7 @@ export default function SchedulingPage() {
     {
       title: '任务名称',
       key: 'name',
-      render: (_: unknown, r: ScheduleTask) =>
-        r.agent_name || (r.agent_id ? `Agent ${r.agent_id.slice(0, 8)}` : r.wagent_id ? `W-Agent ${r.wagent_id.slice(0, 8)}` : `Task ${r.id.slice(0, 8)}`),
+      render: (_: unknown, r: ScheduleTask) => getTaskDisplayName(r),
     },
     {
       title: 'Agent/W-Agent',

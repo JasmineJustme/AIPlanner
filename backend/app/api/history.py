@@ -47,6 +47,7 @@ async def list_execution_history(
             "wagent_id": h.wagent_id,
             "agent_name": h.agent_name,
             "status": h.status,
+            "input_params": h.input_params,
             "started_at": h.started_at,
             "completed_at": h.completed_at,
             "duration_ms": h.duration_ms,

@@ -45,6 +45,12 @@ export interface DataSource {
   last_sync_error?: string;
 }
 
+export interface LLMUsageSummary {
+  total_tokens_used: number;
+  total_cost: number;
+  prompt_version: number;
+}
+
 export interface LLMConfig {
   id: string;
   purpose: string;
