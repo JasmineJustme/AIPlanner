@@ -15,6 +15,18 @@ class BatchIdsBody(BaseModel):
 router = APIRouter(prefix="/todos", tags=["todos"])
 
 
+def _normalize_recurrence_fields(data: dict) -> dict:
+    is_recurring = bool(data.get("is_recurring", False))
+    normalized = dict(data)
+    normalized["is_recurring"] = is_recurring
+    if not is_recurring:
+        normalized["recurrence_cron"] = None
+        normalized["recurrence_count"] = 0
+    else:
+        normalized["recurrence_count"] = int(data.get("recurrence_count") or 0)
+    return normalized
+
+
 async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
     from app.api.orchestration import get_orchestration_entry, map_orchestration_status_to_todo_status
 
@@ -104,7 +116,7 @@ async def create_todo(
     payload: TodoCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    data = payload.model_dump()
+    data = _normalize_recurrence_fields(payload.model_dump())
     todo = Todo(
         title=data["title"],
         description=data.get("description"),
@@ -115,6 +127,9 @@ async def create_todo(
         due_date=data.get("due_date"),
         tags=data.get("tags", []),
         project=data.get("project"),
+        is_recurring=data.get("is_recurring", False),
+        recurrence_cron=data.get("recurrence_cron"),
+        recurrence_count=data.get("recurrence_count", 0),
     )
     db.add(todo)
     await db.flush()
@@ -130,6 +145,22 @@ async def update_todo(
 ):
     todo = await _get_todo_or_404(todo_id, db)
     data = payload.model_dump(exclude_unset=True)
+
+    if "is_recurring" in data:
+        data = _normalize_recurrence_fields({
+            "is_recurring": data.get("is_recurring"),
+            "recurrence_cron": data.get("recurrence_cron", todo.recurrence_cron),
+            "recurrence_count": data.get("recurrence_count", todo.recurrence_count),
+        }) | {k: v for k, v in data.items() if k not in {"is_recurring", "recurrence_cron", "recurrence_count"}}
+    elif "recurrence_cron" in data or "recurrence_count" in data:
+        data = _normalize_recurrence_fields(
+            {
+                "is_recurring": True,
+                "recurrence_cron": data.get("recurrence_cron", todo.recurrence_cron),
+                "recurrence_count": data.get("recurrence_count", todo.recurrence_count),
+            }
+        ) | {k: v for k, v in data.items() if k not in {"is_recurring", "recurrence_cron", "recurrence_count"}}
+
     for k, v in data.items():
         setattr(todo, k, v)
 
@@ -181,6 +212,9 @@ async def rerun_todo(
         due_date=todo.due_date,
         tags=list(todo.tags or []),
         project=todo.project,
+        is_recurring=todo.is_recurring,
+        recurrence_cron=todo.recurrence_cron,
+        recurrence_count=todo.recurrence_count,
     )
     db.add(new_todo)
     await db.flush()

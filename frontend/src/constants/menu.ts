@@ -16,6 +16,7 @@ import {
   ToolOutlined,
   AuditOutlined,
   NotificationOutlined,
+  ProfileOutlined,
 } from '@ant-design/icons';
 import { ROUTES } from './routes';
 
@@ -56,6 +57,7 @@ export const menuConfig: MenuItem[] = [
       { key: 'config-workflows', label: 'Workflow 管理', icon: BranchesOutlined, path: ROUTES.CONFIG_WORKFLOWS },
       { key: 'config-wagents', label: 'W-Agent 管理', icon: RobotOutlined, path: ROUTES.CONFIG_WAGENTS },
       { key: 'config-datasources', label: '数据源配置', icon: DatabaseOutlined, path: ROUTES.CONFIG_DATASOURCES },
+      { key: 'config-responsibilities', label: '工作职责配置', icon: ProfileOutlined, path: ROUTES.CONFIG_RESPONSIBILITIES },
       { key: 'config-llm', label: '大模型配置', icon: OpenAIOutlined, path: ROUTES.CONFIG_LLM },
       { key: 'config-notifications', label: '提醒渠道配置', icon: NotificationOutlined, path: ROUTES.CONFIG_NOTIFICATIONS },
       { key: 'config-import-export', label: '配置导入/导出', icon: ImportOutlined, path: ROUTES.CONFIG_IMPORT_EXPORT },

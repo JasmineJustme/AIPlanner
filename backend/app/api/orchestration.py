@@ -281,6 +281,57 @@ def _parse_schedule_datetime(value: str | None) -> datetime:
         return datetime.now(UTC).replace(tzinfo=None, microsecond=0)
 
 
+def _normalize_recurrence_payload(data: dict | None) -> dict:
+    payload = data or {}
+    is_recurring = bool(payload.get("is_recurring", False))
+    recurrence_cron = payload.get("recurrence_cron") if is_recurring else None
+    recurrence_count = int(payload.get("recurrence_count") or 0) if is_recurring else 0
+    return {
+        "is_recurring": is_recurring,
+        "recurrence_cron": recurrence_cron,
+        "recurrence_count": recurrence_count,
+    }
+
+
+def _build_recurrence_defaults_from_todos(todos: list[Todo]) -> dict:
+    if not todos:
+        return _normalize_recurrence_payload(None)
+    first = todos[0]
+    return _normalize_recurrence_payload(
+        {
+            "is_recurring": getattr(first, "is_recurring", False),
+            "recurrence_cron": getattr(first, "recurrence_cron", None),
+            "recurrence_count": getattr(first, "recurrence_count", 0),
+        }
+    )
+
+
+def _apply_recurrence_to_plan(plan: dict | None, defaults: dict) -> dict:
+    merged = dict(plan or {})
+    recurrence = _normalize_recurrence_payload(
+        {
+            "is_recurring": merged.get("is_recurring", defaults.get("is_recurring", False)),
+            "recurrence_cron": merged.get("recurrence_cron", defaults.get("recurrence_cron")),
+            "recurrence_count": merged.get("recurrence_count", defaults.get("recurrence_count", 0)),
+        }
+    )
+    merged.update(recurrence)
+    return merged
+
+
+async def _sync_todo_recurrence_for_orchestration(db: AsyncSession, entry: dict) -> None:
+    todo_ids = [item.get("id") for item in entry.get("todos", []) if item.get("id")]
+    if not todo_ids:
+        return
+    normalized = _normalize_recurrence_payload(entry.get("plan") or {})
+    result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
+    for todo in result.scalars().all():
+        todo.is_recurring = normalized["is_recurring"]
+        todo.recurrence_cron = normalized["recurrence_cron"]
+        todo.recurrence_count = normalized["recurrence_count"]
+    await db.flush()
+
+
 async def _cancel_schedule_for_orchestration(db: AsyncSession, orch_id: str) -> None:
     existing_task_result = await db.execute(
         select(ScheduleTask).where(ScheduleTask.orchestration_id == orch_id)
@@ -356,6 +407,10 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
 
     schedule_plan.name = entry.get("summary") or schedule_plan.name
     schedule_plan.status = "active"
+    recurrence = _normalize_recurrence_payload(plan_data)
+    schedule_plan.is_recurring = recurrence["is_recurring"]
+    schedule_plan.recurrence_cron = recurrence["recurrence_cron"]
+    schedule_plan.recurrence_count = recurrence["recurrence_count"]
     await db.flush()
 
 
@@ -447,11 +502,15 @@ async def submit_orchestration(
             "deadline": t.due_date.isoformat() if t.due_date else None,
             "created_at": t.created_at.isoformat() if t.created_at else now,
             "updated_at": t.updated_at.isoformat() if t.updated_at else now,
+            "is_recurring": bool(getattr(t, "is_recurring", False)),
+            "recurrence_cron": getattr(t, "recurrence_cron", None),
+            "recurrence_count": int(getattr(t, "recurrence_count", 0) or 0),
         }
         for t in todos
     ]
 
     summary = build_orchestration_summary(todos)
+    recurrence_defaults = _build_recurrence_defaults_from_todos(todos)
 
     # Update todos status to orchestrating
     for todo in todos:
@@ -481,10 +540,10 @@ async def submit_orchestration(
             entry["error"] = plan_result["error"]
         else:
             entry["status"] = plan_result.get("status", "pending_confirm")
-            entry["plan"] = plan_result.get("plan")
+            entry["plan"] = _apply_recurrence_to_plan(plan_result.get("plan"), recurrence_defaults)
             entry["llm_reason"] = plan_result.get("llm_reason")
 
-            plan = plan_result.get("plan", {})
+            plan = entry.get("plan", {})
             if plan and plan.get("plan_type") in ("agent",):
                 rec_id = plan.get("recommended_id")
                 rec_name = plan.get("recommended_name", "")
@@ -577,8 +636,17 @@ async def confirm_orchestration(
         plan["estimated_duration_minutes"] = payload.get("estimated_duration_minutes", plan.get("estimated_duration_minutes"))
         plan["start_time"] = _normalize_plan_time_value(payload.get("start_time")) or plan.get("start_time")
         plan["deadline"] = _normalize_plan_time_value(payload.get("deadline")) or plan.get("deadline")
-        entry["plan"] = plan
+        if "is_recurring" in payload:
+            plan["is_recurring"] = payload.get("is_recurring")
+        if "recurrence_cron" in payload:
+            plan["recurrence_cron"] = payload.get("recurrence_cron")
+        if "recurrence_count" in payload:
+            plan["recurrence_count"] = payload.get("recurrence_count")
+        entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
+    else:
+        entry["plan"] = _apply_recurrence_to_plan(entry.get("plan"), _normalize_recurrence_payload(entry.get("plan") or {}))
     await ensure_schedule_for_orchestration(db, orch_id, entry)
+    await _sync_todo_recurrence_for_orchestration(db, entry)
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
@@ -601,8 +669,17 @@ async def confirm_wagent(
         plan["estimated_duration_minutes"] = payload.get("estimated_duration_minutes", plan.get("estimated_duration_minutes"))
         plan["start_time"] = _normalize_plan_time_value(payload.get("start_time")) or plan.get("start_time")
         plan["deadline"] = _normalize_plan_time_value(payload.get("deadline")) or plan.get("deadline")
-        entry["plan"] = plan
+        if "is_recurring" in payload:
+            plan["is_recurring"] = payload.get("is_recurring")
+        if "recurrence_cron" in payload:
+            plan["recurrence_cron"] = payload.get("recurrence_cron")
+        if "recurrence_count" in payload:
+            plan["recurrence_count"] = payload.get("recurrence_count")
+        entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
+    else:
+        entry["plan"] = _apply_recurrence_to_plan(entry.get("plan"), _normalize_recurrence_payload(entry.get("plan") or {}))
     await ensure_schedule_for_orchestration(db, orch_id, entry)
+    await _sync_todo_recurrence_for_orchestration(db, entry)
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
     return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
@@ -662,7 +739,13 @@ async def modify_params(
         plan["start_time"] = _normalize_plan_time_value(payload["start_time"])
     if "deadline" in payload:
         plan["deadline"] = _normalize_plan_time_value(payload["deadline"])
-    entry["plan"] = plan
+    if "is_recurring" in payload:
+        plan["is_recurring"] = payload["is_recurring"]
+    if "recurrence_cron" in payload:
+        plan["recurrence_cron"] = payload["recurrence_cron"]
+    if "recurrence_count" in payload:
+        plan["recurrence_count"] = payload["recurrence_count"]
+    entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
     _save_store()
     return {"code": 200, "message": "success", "data": entry}
 

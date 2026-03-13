@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   DatePicker,
   Descriptions,
   Drawer,
@@ -136,6 +137,9 @@ export default function TodosPage() {
       priority: 'medium',
       tags: [],
       execution_mode: TodoExecutionMode.System,
+      is_recurring: false,
+      recurrence_count: 0,
+      recurrence_cron: undefined,
     });
     setDrawerOpen(true);
   };
@@ -151,6 +155,9 @@ export default function TodosPage() {
       due_date: record.due_date ? dayjs(record.due_date) : null,
       tags: record.tags ?? [],
       project: record.project,
+      is_recurring: !!record.is_recurring,
+      recurrence_cron: record.recurrence_cron,
+      recurrence_count: record.recurrence_count ?? 0,
     });
     setDrawerOpen(true);
   };
@@ -158,6 +165,7 @@ export default function TodosPage() {
   const handleSubmitTodo = async (values: Record<string, unknown>) => {
     setSaving(true);
     try {
+      const isRecurring = Boolean(values.is_recurring);
       const payload = {
         title: values.title,
         description: values.description,
@@ -166,6 +174,9 @@ export default function TodosPage() {
         due_date: values.due_date ? (values.due_date as { toISOString?: () => string })?.toISOString?.() : undefined,
         tags: Array.isArray(values.tags) ? values.tags : [],
         project: values.project as string | undefined,
+        is_recurring: isRecurring,
+        recurrence_cron: isRecurring ? (values.recurrence_cron as string | undefined) : undefined,
+        recurrence_count: isRecurring ? Number(values.recurrence_count ?? 0) : 0,
       };
       if (editingTodo) {
         await updateTodo(editingTodo.id, payload);
@@ -330,6 +341,11 @@ export default function TodosPage() {
       <div style={{ margin: 0, padding: 12, backgroundColor: '#fafafa', borderRadius: 4 }}>
         <Descriptions title="任务详情" column={1} size="small" bordered>
           <Descriptions.Item label="任务描述">{record.description || '无'}</Descriptions.Item>
+          <Descriptions.Item label="循环设置">
+            {record.is_recurring
+              ? `开启（cron: ${record.recurrence_cron || '-'}，已执行 ${record.recurrence_count ?? 0} 次）`
+              : '未开启'}
+          </Descriptions.Item>
           <Descriptions.Item label="执行方式">
             <Tag color={modeConfig.color}>{modeConfig.text}</Tag>
           </Descriptions.Item>
@@ -389,6 +405,13 @@ export default function TodosPage() {
         const cfg = TODO_STATUS_MAP[s] || { color: 'default', text: s };
         return <Tag color={cfg.color}>{cfg.text}</Tag>;
       },
+    },
+    {
+      title: '循环',
+      key: 'is_recurring',
+      width: 120,
+      render: (_, record) =>
+        record.is_recurring ? <Tag color="processing">循环中</Tag> : <Tag>单次</Tag>,
     },
     {
       title: '截止时间',
@@ -641,7 +664,12 @@ export default function TodosPage() {
           form={form}
           layout="vertical"
           onFinish={handleSubmitTodo}
-          initialValues={{ priority: 'medium', execution_mode: TodoExecutionMode.System }}
+          initialValues={{
+            priority: 'medium',
+            execution_mode: TodoExecutionMode.System,
+            is_recurring: false,
+            recurrence_count: 0,
+          }}
         >
           <Form.Item name="title" label="标题" rules={[{ required: true }]}>
             <Input placeholder="请输入标题" />
@@ -663,6 +691,28 @@ export default function TodosPage() {
           </Form.Item>
           <Form.Item name="project" label="项目">
             <Input placeholder="项目名称" />
+          </Form.Item>
+          <Form.Item name="is_recurring" valuePropName="checked">
+            <Checkbox>循环执行</Checkbox>
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.is_recurring !== curr.is_recurring}>
+            {({ getFieldValue }) => {
+              if (!getFieldValue('is_recurring')) return null;
+              return (
+                <>
+                  <Form.Item
+                    name="recurrence_cron"
+                    label="循环表达式 (cron)"
+                    rules={[{ required: true, message: '请输入 cron 表达式' }]}
+                  >
+                    <Input placeholder="例如: 0 9 * * 1-5" />
+                  </Form.Item>
+                  <Form.Item name="recurrence_count" label="已执行次数">
+                    <Input type="number" min={0} />
+                  </Form.Item>
+                </>
+              );
+            }}
           </Form.Item>
           <Form.Item>
             <Space>

@@ -25,6 +25,7 @@ const ConfigDataSourcesPage = lazy(() => import('@/pages/Config/DataSources'));
 const ConfigLLMPage = lazy(() => import('@/pages/Config/LLM'));
 const ConfigNotificationsPage = lazy(() => import('@/pages/Config/Notifications'));
 const ConfigImportExportPage = lazy(() => import('@/pages/Config/ImportExport'));
+const ConfigResponsibilitiesPage = lazy(() => import('@/pages/Config/Responsibilities'));
 const MessagesPage = lazy(() => import('@/pages/Messages'));
 const SettingsPage = lazy(() => import('@/pages/Settings'));
 const SettingsNotificationPrefsPage = lazy(() => import('@/pages/Settings/NotificationPrefs'));
@@ -72,6 +73,7 @@ export default function App() {
               <Route path="/config/llm" element={<ConfigLLMPage />} />
               <Route path="/config/notifications" element={<ConfigNotificationsPage />} />
               <Route path="/config/import-export" element={<ConfigImportExportPage />} />
+              <Route path="/config/responsibilities" element={<ConfigResponsibilitiesPage />} />
 
               <Route path="/messages" element={<MessagesPage />} />
 

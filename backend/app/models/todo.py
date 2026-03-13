@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -24,3 +24,6 @@ class Todo(TimestampMixin, Base):
         String(36), ForeignKey("todos.id"), nullable=True
     )
     orchestration_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    is_recurring: Mapped[bool] = mapped_column(Boolean, default=False)
+    recurrence_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    recurrence_count: Mapped[int] = mapped_column(Integer, default=0)

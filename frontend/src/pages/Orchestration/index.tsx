@@ -82,6 +82,9 @@ interface OrchestrationDetail {
     estimated_duration_minutes?: number;
     start_time?: string | null;
     deadline?: string | null;
+    is_recurring?: boolean;
+    recurrence_cron?: string | null;
+    recurrence_count?: number;
     steps?: Array<{ order: number; workflow_name: string }>;
   };
   llm_reason?: string;
@@ -135,6 +138,9 @@ function OrchestrationCard({
       estimated_duration_minutes: plan?.estimated_duration_minutes ?? 30,
       start_time: plan?.start_time ? dayjs(plan.start_time) : null,
       deadline: plan?.deadline ? dayjs(plan.deadline) : null,
+      is_recurring: !!plan?.is_recurring,
+      recurrence_cron: plan?.recurrence_cron || undefined,
+      recurrence_count: plan?.recurrence_count ?? 0,
     });
   }, [form]);
 
@@ -196,6 +202,9 @@ function OrchestrationCard({
         estimated_duration_minutes: values.estimated_duration_minutes,
         start_time: values.start_time?.toISOString?.(),
         deadline: values.deadline?.toISOString?.(),
+        is_recurring: Boolean(values.is_recurring),
+        recurrence_cron: values.is_recurring ? values.recurrence_cron : null,
+        recurrence_count: values.is_recurring ? Number(values.recurrence_count ?? 0) : 0,
       };
       if (planType === 'wagent' || planType === 'new_wagent') {
         await confirmWAgent(orch.orch_id, payload);
@@ -238,6 +247,9 @@ function OrchestrationCard({
         estimated_duration_minutes: values.estimated_duration_minutes,
         start_time: values.start_time?.toISOString?.(),
         deadline: values.deadline?.toISOString?.(),
+        is_recurring: Boolean(values.is_recurring),
+        recurrence_cron: values.is_recurring ? values.recurrence_cron : null,
+        recurrence_count: values.is_recurring ? Number(values.recurrence_count ?? 0) : 0,
       });
       message.success('参数已更新');
     } catch (e) {
@@ -308,6 +320,11 @@ function OrchestrationCard({
     if (!value) return '未设置';
     const parsed = dayjs(value);
     return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : value;
+  };
+
+  const getRecurrenceText = () => {
+    if (!detail?.plan?.is_recurring) return '不循环';
+    return `循环执行（cron: ${detail.plan.recurrence_cron || '-'}，已执行 ${detail.plan.recurrence_count ?? 0} 次）`;
   };
 
   const statusCfg = STATUS_CONFIG[orch.status] || { color: 'default', text: orch.status, icon: null };
@@ -444,6 +461,10 @@ function OrchestrationCard({
                   <Text strong>截止时间：</Text>
                   <Text style={{ marginLeft: 8 }}>{formatPlanTime(detail.plan?.deadline)}</Text>
                 </div>
+                <div style={{ marginBottom: 12 }}>
+                  <Text strong>循环：</Text>
+                  <Text style={{ marginLeft: 8 }}>{getRecurrenceText()}</Text>
+                </div>
                 <ReasonCollapse reason={getReason()} />
               </div>
             ) : (
@@ -498,6 +519,11 @@ function OrchestrationCard({
               <div style={{ marginBottom: 16 }}>
                 <Text strong>截止时间：</Text>
                 <Text style={{ marginLeft: 8 }}>{formatPlanTime(detail.plan?.deadline)}</Text>
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <Text strong>循环：</Text>
+                <Text style={{ marginLeft: 8 }}>{getRecurrenceText()}</Text>
               </div>
 
               <div style={{ marginBottom: 16 }}>
@@ -561,6 +587,28 @@ function OrchestrationCard({
                     </Form.Item>
                     <Form.Item name="deadline" label="截止时间">
                       <DatePicker showTime style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="is_recurring" valuePropName="checked">
+                      <Checkbox>循环执行</Checkbox>
+                    </Form.Item>
+                    <Form.Item noStyle shouldUpdate={(prev, curr) => prev.is_recurring !== curr.is_recurring}>
+                      {({ getFieldValue }) => {
+                        if (!getFieldValue('is_recurring')) return null;
+                        return (
+                          <>
+                            <Form.Item
+                              name="recurrence_cron"
+                              label="循环表达式 (cron)"
+                              rules={[{ required: true, message: '请输入 cron 表达式' }]}
+                            >
+                              <Input placeholder="例如: 0 9 * * 1-5" />
+                            </Form.Item>
+                            <Form.Item name="recurrence_count" label="已执行次数">
+                              <InputNumber min={0} style={{ width: 120 }} />
+                            </Form.Item>
+                          </>
+                        );
+                      }}
                     </Form.Item>
                   </Collapse.Panel>
                 </Collapse>

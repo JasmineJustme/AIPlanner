@@ -12,6 +12,9 @@ class TodoCreate(BaseModel):
     due_date: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     project: str | None = None
+    is_recurring: bool = False
+    recurrence_cron: str | None = None
+    recurrence_count: int = 0
 
 
 class TodoUpdate(BaseModel):
@@ -23,6 +26,9 @@ class TodoUpdate(BaseModel):
     due_date: Optional[datetime] = None
     tags: Optional[list[str]] = None
     project: Optional[str] = None
+    is_recurring: Optional[bool] = None
+    recurrence_cron: Optional[str] = None
+    recurrence_count: Optional[int] = None
 
 
 class TodoResponse(BaseModel):
@@ -43,6 +49,9 @@ class TodoResponse(BaseModel):
     review_reason: str | None = None
     duplicate_of: str | None = None
     orchestration_id: str | None = None
+    is_recurring: bool = False
+    recurrence_cron: str | None = None
+    recurrence_count: int = 0
     created_at: datetime
     updated_at: datetime
 

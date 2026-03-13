@@ -13,6 +13,8 @@ import {
   message,
   Typography,
   Empty,
+  Tag,
+  Tooltip,
 } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import {
@@ -52,6 +54,9 @@ interface DataSourceItem {
   input_params?: ParamDefinition[];
   output_params?: ParamDefinition[];
   is_enabled?: boolean;
+  last_sync_at?: string;
+  last_sync_status?: string;
+  last_sync_error?: string;
 }
 
 interface AgentItem {
@@ -95,6 +100,7 @@ function DataSourceCard({
 }) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(ds.last_sync_status !== 'success');
 
   const selectedAgentId = Form.useWatch('agent_id', form) as string | undefined;
   const selectedAgent = useMemo(
@@ -117,7 +123,7 @@ function DataSourceCard({
       savedMap.set(item.name, String(item.value ?? ''));
     }
 
-    const inputValues = paramsToRender.reduce<Record<string, string>>((acc, param) => {
+    const prefillValues = paramsToRender.reduce<Record<string, string>>((acc, param) => {
       if (savedMap.has(param.name)) {
         acc[param.name] = savedMap.get(param.name) ?? '';
       } else {
@@ -126,9 +132,32 @@ function DataSourceCard({
       return acc;
     }, {});
 
-    baseValues.input_param_values = inputValues;
+    baseValues.input_param_values = prefillValues;
     form.setFieldsValue(baseValues);
   }, [ds, agents, form]);
+
+  useEffect(() => {
+    // Default behavior: auto collapse only when latest persisted status is success.
+    setExpanded(ds.last_sync_status !== 'success');
+  }, [ds.id, ds.last_sync_status]);
+
+  const statusTag = useMemo(() => {
+    if (ds.last_sync_status === 'success') {
+      return <Tag color="success">测试成功</Tag>;
+    }
+    if (ds.last_sync_status === 'failed') {
+      return (
+        <Tooltip title={ds.last_sync_error || '最近一次检查失败'}>
+          <Tag color="error">测试失败</Tag>
+        </Tooltip>
+      );
+    }
+    return <Tag>未测试</Tag>;
+  }, [ds.last_sync_error, ds.last_sync_status]);
+
+  const statusTime = ds.last_sync_at
+    ? new Date(ds.last_sync_at).toLocaleString()
+    : '暂无记录';
 
   const handleFinish = async (values: Record<string, unknown>) => {
     setLoading(true);
@@ -136,6 +165,7 @@ function DataSourceCard({
       const selected = String(values.agent_id ?? '');
       const inputValues = (values.input_param_values as Record<string, string> | undefined) ?? {};
       await onUpdate(ds.type, selected, inputValues);
+      setExpanded(false);
     } finally {
       setLoading(false);
     }
@@ -156,6 +186,16 @@ function DataSourceCard({
         />
       }
     >
+      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          {statusTag}
+          <Text type="secondary" style={{ marginLeft: 8 }}>最近检查: {statusTime}</Text>
+        </div>
+        <Button type="link" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? '收起详情' : '展开详情'}
+        </Button>
+      </div>
+      {expanded ? (
       <Form
         form={form}
         layout="vertical"
@@ -218,6 +258,7 @@ function DataSourceCard({
           </Popconfirm>
         </Form.Item>
       </Form>
+      ) : null}
     </Card>
   );
 }

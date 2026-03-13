@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +61,12 @@ def _serialize_datasource(ds: DataSource) -> DataSourceResponse:
         "updated_at": ds.updated_at,
     }
     return DataSourceResponse.model_validate(payload)
+
+
+def _mark_datasource_check(ds: DataSource, status: str, error: str | None = None) -> None:
+    ds.last_sync_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    ds.last_sync_status = status
+    ds.last_sync_error = error
 
 
 @router.get("")
@@ -159,6 +166,8 @@ async def test_datasource(
     if not ds:
         raise HTTPException(status_code=404, detail="Datasource not found")
     if not ds.dify_endpoint:
+        _mark_datasource_check(ds, "failed", "Datasource 未配置 Endpoint")
+        await db.flush()
         raise HTTPException(status_code=400, detail="Datasource 未配置 Endpoint")
 
     start = time.monotonic()
@@ -166,8 +175,13 @@ async def test_datasource(
     latency_ms = int((time.monotonic() - start) * 1000)
 
     if not test_result.get("connected"):
-        raise HTTPException(status_code=502, detail=test_result.get("error") or "连接失败")
+        error = test_result.get("error") or "连接失败"
+        _mark_datasource_check(ds, "failed", error)
+        await db.flush()
+        raise HTTPException(status_code=502, detail=error)
 
+    _mark_datasource_check(ds, "success", None)
+    await db.flush()
     return {
         "code": 200,
         "message": "success",
@@ -188,6 +202,9 @@ async def sync_datasource(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Datasource not found")
+
+    _mark_datasource_check(ds, "success", None)
+    await db.flush()
     return {"code": 200, "message": "success", "data": "sync triggered"}
 
 

@@ -14,6 +14,7 @@ from app.models.settings import SystemSetting
 from app.models.audit_log import AuditLog
 from app.models.task_queue import TaskQueue
 from app.models.llm_usage_log import LLMUsageLog
+from app.models.responsibility import Responsibility
 
 __all__ = [
     "Base",
@@ -36,4 +37,5 @@ __all__ = [
     "AuditLog",
     "TaskQueue",
     "LLMUsageLog",
+    "Responsibility",
 ]

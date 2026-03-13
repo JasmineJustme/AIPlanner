@@ -91,6 +91,15 @@ export const toggleNotificationChannel = (channelType: string) =>
 export const testNotificationChannel = (channelType: string) =>
   client.post(`/config/notifications/${channelType}/test`);
 
+// Responsibilities
+export const getResponsibilities = () => client.get('/config/responsibilities');
+export const createResponsibility = (data: Record<string, unknown>) =>
+  client.post('/config/responsibilities', data);
+export const updateResponsibility = (id: string, data: Record<string, unknown>) =>
+  client.put(`/config/responsibilities/${id}`, data);
+export const deleteResponsibility = (id: string) =>
+  client.delete(`/config/responsibilities/${id}`);
+
 // Import/Export
 export const exportConfig = () => client.get('/config/export');
 export const previewImport = (file: File) => {
