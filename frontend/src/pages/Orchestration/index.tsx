@@ -77,6 +77,7 @@ interface OrchestrationDetail {
     recommended_name?: string;
     reason?: string;
     input_params?: Record<string, unknown>;
+    editable_input_keys?: string[];
     priority?: string;
     estimated_duration_minutes?: number;
     start_time?: string | null;
@@ -173,7 +174,10 @@ function OrchestrationCard({
   }, [agentModalOpen]);
 
   const buildInputParams = (values: Record<string, unknown>) => {
-    const paramKeys = Object.keys(detail?.plan?.input_params || {});
+    const editableKeys = detail?.plan?.editable_input_keys;
+    const paramKeys = Array.isArray(editableKeys)
+      ? editableKeys
+      : Object.keys(detail?.plan?.input_params || {});
     return paramKeys.reduce<Record<string, unknown>>((acc, key) => {
       acc[key] = values[key];
       return acc;
@@ -516,22 +520,28 @@ function OrchestrationCard({
               <Form form={form} layout="vertical">
                 <Collapse style={{ marginBottom: 16 }}>
                   <Collapse.Panel header="输入参数" key="input_params">
-                    {Object.entries(detail.plan?.input_params || {}).length > 0 ? (
-                      <>
-                        {Object.entries(detail.plan?.input_params || {}).map(
-                          ([key, val]) => (
+                    {(() => {
+                      const baseParams = detail.plan?.input_params || {};
+                      const hasEditableKeys = Array.isArray(detail.plan?.editable_input_keys);
+                      const renderKeys = hasEditableKeys
+                        ? (detail.plan?.editable_input_keys || [])
+                        : Object.keys(baseParams);
+                      if (renderKeys.length === 0) {
+                        return <Text type="secondary">该执行器参数由系统自动处理，无需手动填写</Text>;
+                      }
+                      return (
+                        <>
+                          {renderKeys.map((key) => (
                             <Form.Item key={key} name={key} label={key}>
                               <Input
-                                placeholder={String(val ?? '')}
-                                defaultValue={String(val ?? '')}
+                                placeholder={String(baseParams[key] ?? '')}
+                                defaultValue={String(baseParams[key] ?? '')}
                               />
                             </Form.Item>
-                          )
-                        )}
-                      </>
-                    ) : (
-                      <Text type="secondary">暂无输入参数</Text>
-                    )}
+                          ))}
+                        </>
+                      );
+                    })()}
                   </Collapse.Panel>
 
                   <Collapse.Panel header="调度设置" key="scheduling">

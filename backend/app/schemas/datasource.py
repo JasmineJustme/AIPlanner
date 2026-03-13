@@ -8,6 +8,7 @@ from app.schemas.agent import ParamDefinition
 class DataSourceCreate(BaseModel):
     type: str
     name: str
+    agent_id: Optional[str] = None
     dify_endpoint: Optional[str] = None
     dify_api_key: Optional[str] = None
     input_params: Optional[list[ParamDefinition]] = []
@@ -16,6 +17,7 @@ class DataSourceCreate(BaseModel):
 
 class DataSourceUpdate(BaseModel):
     name: Optional[str] = None
+    agent_id: Optional[str] = None
     dify_endpoint: Optional[str] = None
     dify_api_key: Optional[str] = None
     input_params: Optional[list[ParamDefinition]] = None
@@ -29,6 +31,7 @@ class DataSourceResponse(BaseModel):
     id: str
     name: str | None = None
     type: str
+    agent_id: str | None = None
     dify_endpoint: str | None = None
     dify_api_key: str | None = None
     input_params: list[ParamDefinition] = []

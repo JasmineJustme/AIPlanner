@@ -11,6 +11,19 @@ from app.services.llm_client import llm_client
 router = APIRouter(prefix="/config/llm", tags=["config-llm"])
 
 LLM_PURPOSES = ["chat", "extract", "summarize", "todo_analysis", "orchestration", "scheduling"]
+REQUIRED_PROMPT_PLACEHOLDERS_BY_PURPOSE = {
+    "orchestration": [
+        "{current_time}",
+        "{todo_desc}",
+        "{agent_desc}",
+        "{wagent_desc}",
+        "{workflow_desc}",
+    ],
+    "todo_analysis": [
+        "{current_time}",
+        "{todo_desc}",
+    ],
+}
 
 
 def _serialize_llm_config(cfg: LLMConfig) -> LLMConfigResponse:
@@ -19,6 +32,27 @@ def _serialize_llm_config(cfg: LLMConfig) -> LLMConfigResponse:
     data["temperature_enabled"] = prefs.get("temperature_enabled", True)
     data["top_p_enabled"] = prefs.get("top_p_enabled", True)
     return LLMConfigResponse.model_validate(data)
+
+
+def _validate_orchestration_prompt_template(purpose: str, prompt_template: str | None) -> None:
+    required = REQUIRED_PROMPT_PLACEHOLDERS_BY_PURPOSE.get(purpose)
+    if required is None or prompt_template is None:
+        return
+    missing = [token for token in required if token not in prompt_template]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MISSING_REQUIRED_PLACEHOLDERS",
+                "field": "prompt_template",
+                "purpose": purpose,
+                "missing_placeholders": missing,
+                "message": (
+                    f"{purpose} prompt_template missing required placeholders: "
+                    + ", ".join(missing)
+                ),
+            },
+        )
 
 
 @router.get("")
@@ -69,6 +103,7 @@ async def update_llm_config(
         db.add(cfg)
         await db.flush()
     data = payload.model_dump(exclude_unset=True)
+    _validate_orchestration_prompt_template(purpose, data.get("prompt_template"))
 
     prefs = dict(cfg.user_preferences or {})
     for pref_key in ("temperature_enabled", "top_p_enabled"):

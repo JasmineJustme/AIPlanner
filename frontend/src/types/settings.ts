@@ -35,6 +35,7 @@ export interface DataSource {
   id: string;
   type: string;
   name: string;
+  agent_id?: string;
   dify_endpoint: string;
   dify_api_key: string;
   input_params: ParamDefinition[];

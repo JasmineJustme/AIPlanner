@@ -16,6 +16,8 @@ export interface ParamDefinition {
   name: string;
   type: string;
   required?: boolean;
+  user_fill_enabled?: boolean;
   default?: string | null;
+  value?: string | null;
   description?: string | null;
 }

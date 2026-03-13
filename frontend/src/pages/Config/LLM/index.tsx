@@ -13,6 +13,10 @@ import {
   Typography,
   Switch,
   Space,
+  Tooltip,
+  Alert,
+  Tag,
+  Collapse,
 } from 'antd';
 import {
   getLLMConfig,
@@ -39,6 +43,67 @@ const PROVIDER_OPTIONS = [
   { value: 'custom', label: 'Custom' },
 ];
 
+const REQUIRED_ORCHESTRATION_PLACEHOLDERS = [
+  '{current_time}',
+  '{todo_desc}',
+  '{agent_desc}',
+  '{wagent_desc}',
+  '{workflow_desc}',
+] as const;
+
+const REQUIRED_TODO_ANALYSIS_PLACEHOLDERS = [
+  '{current_time}',
+  '{todo_desc}',
+] as const;
+
+const FIXED_JSON_MARKER_START = '# ==== FIXED_JSON_OUTPUT_FORMAT_START (DO NOT EDIT) ====';
+const FIXED_JSON_MARKER_END = '# ==== FIXED_JSON_OUTPUT_FORMAT_END ====';
+
+const ORCHESTRATION_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "plan_type": "agent | wagent | new_wagent",\n  "recommended_id": "推荐的 agent/wagent id，没有可留空字符串",\n  "recommended_name": "推荐名称",\n  "reason": "推荐原因",\n  "input_params": {"参数名": "参数值"},\n  "priority": "high | medium | low",\n  "estimated_duration_minutes": 30,\n  "start_time": "ISO8601 时间，例如 2026-03-09T09:00:00，必须结合当前时间判断，无法判断可用 null",\n  "deadline": "ISO8601 时间，例如 2026-03-09T18:00:00，需结合当前时间、预计时长和待办截止时间判断，无法判断可用 null",\n  "steps": [{"order": 1, "workflow_name": "步骤名"}]\n}\n${FIXED_JSON_MARKER_END}`;
+
+const TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "summary": "待办摘要",\n  "priority": "high | medium | low",\n  "urgency_reason": "紧急性原因",\n  "suggested_actions": ["动作1", "动作2"],\n  "risks": ["风险1", "风险2"],\n  "follow_up_questions": ["问题1", "问题2"]\n}\n${FIXED_JSON_MARKER_END}`;
+
+const ORCHESTRATION_PROMPT_EXAMPLE = `分析以下待办任务，从可用的Agent、W-Agent和Workflow中选择最佳方案来完成任务。\n\n当前时间：\n{current_time}\n\n待办任务：\n{todo_desc}\n\n可用Agent：\n{agent_desc}\n\n可用W-Agent：\n{wagent_desc}\n\n可用Workflow：\n{workflow_desc}\n\n要求：\n1. 结合任务描述和候选 input_params 自动补全最合适的 input_params。\n2. 必须结合上方“当前时间”为任务生成 start_time 与 deadline。\n3. deadline 不能晚于任务中最早的 due_date；如没有 due_date，请结合当前时间与 estimated_duration_minutes 给出合理 deadline。\n4. 若选择 new_wagent，请给出 steps；否则 steps 可为空数组。\n5. recommended_name 必须与 recommended_id 对应。`;
+
+const TODO_ANALYSIS_PROMPT_EXAMPLE = `请对待办进行结构化梳理，并给出执行建议。\n\n当前时间：\n{current_time}\n\n待办任务：\n{todo_desc}\n\n要求：\n1. 输出必须与固定 JSON 结构一致。\n2. priority 仅可为 high / medium / low。\n3. suggested_actions 给出可直接执行的动作清单。\n4. risks 和 follow_up_questions 为空时返回空数组。`;
+
+const PROMPT_TEMPLATE_ENHANCEMENT_CONFIG: Record<string, {
+  requiredPlaceholders: readonly string[];
+  labelHint: string;
+  fixedJsonOutput: string;
+  promptExample: string;
+}> = {
+  orchestration: {
+    requiredPlaceholders: REQUIRED_ORCHESTRATION_PLACEHOLDERS,
+    labelHint: '编排 prompt 必须预留指定字段',
+    fixedJsonOutput: ORCHESTRATION_FIXED_JSON_OUTPUT_FORMAT,
+    promptExample: ORCHESTRATION_PROMPT_EXAMPLE,
+  },
+  todo_analysis: {
+    requiredPlaceholders: REQUIRED_TODO_ANALYSIS_PLACEHOLDERS,
+    labelHint: '梳理 prompt 必须预留指定字段',
+    fixedJsonOutput: TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT,
+    promptExample: TODO_ANALYSIS_PROMPT_EXAMPLE,
+  },
+};
+
+const buildPromptTemplateWithFixedPart = (editablePrompt: string, fixedPart: string) => {
+  const body = (editablePrompt || '').trim();
+  return body ? `${body}\n\n${fixedPart}` : fixedPart;
+};
+
+const splitPromptTemplateWithFixedPart = (fullTemplate: string, fallbackFixedPart: string) => {
+  const raw = fullTemplate || '';
+  const startIdx = raw.indexOf(FIXED_JSON_MARKER_START);
+  const endIdx = raw.indexOf(FIXED_JSON_MARKER_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
+    return { editablePrompt: raw, fixedPart: fallbackFixedPart };
+  }
+  const editablePrompt = raw.slice(0, startIdx).trimEnd();
+  const fixedPart = raw.slice(startIdx, endIdx + FIXED_JSON_MARKER_END.length);
+  return { editablePrompt, fixedPart };
+};
+
 function LLMTab({
   purpose,
   label,
@@ -56,6 +121,11 @@ function LLMTab({
 
   const [usage, setUsage] = useState<LLMUsageSummary | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
+  const enhancementConfig = PROMPT_TEMPLATE_ENHANCEMENT_CONFIG[purpose];
+  const isPromptTemplateEnhanced = !!enhancementConfig;
+  const [fixedPromptPart, setFixedPromptPart] = useState(
+    enhancementConfig?.fixedJsonOutput ?? ''
+  );
   // Add ref to track notification state
   const notifiedRef = useRef(false);
 
@@ -113,6 +183,15 @@ function LLMTab({
           }
           setUseTemperature((config.temperature_enabled as boolean | undefined) ?? true);
           setUseTopP((config.top_p_enabled as boolean | undefined) ?? true);
+          const savedPrompt = String(config.prompt_template ?? '');
+          const splitPrompt = isPromptTemplateEnhanced
+            ? splitPromptTemplateWithFixedPart(savedPrompt, enhancementConfig.fixedJsonOutput)
+            : { editablePrompt: savedPrompt, fixedPart: '' };
+          if (isPromptTemplateEnhanced) {
+            setFixedPromptPart(splitPrompt.fixedPart || enhancementConfig.fixedJsonOutput);
+          } else {
+            setFixedPromptPart('');
+          }
           form.setFieldsValue({
             provider: config.provider ?? 'openai',
             model_name: config.model_name ?? '',
@@ -121,12 +200,58 @@ function LLMTab({
             temperature: config.temperature ?? 0.7,
             top_p: config.top_p ?? 0.9,
             max_tokens: config.max_tokens ?? 4096,
-            prompt_template: config.prompt_template ?? '',
+            prompt_template: splitPrompt.editablePrompt,
           });
         }
       })
       .catch(() => message.error('加载失败'));
-  }, [purpose, form, loadUsage]);
+  }, [purpose, form, loadUsage, isPromptTemplateEnhanced, enhancementConfig]);
+
+  const buildPromptTemplatePayload = (editablePrompt: unknown) => {
+    const raw = String(editablePrompt ?? '');
+    return isPromptTemplateEnhanced
+      ? buildPromptTemplateWithFixedPart(raw, fixedPromptPart || enhancementConfig.fixedJsonOutput)
+      : raw;
+  };
+
+  const handleCopyFixedJsonBlock = async () => {
+    if (!fixedPromptPart) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(fixedPromptPart);
+      message.success('固定 JSON 区块已复制');
+    } catch {
+      message.error('复制失败，请手动复制');
+    }
+  };
+
+  const buildPromptFieldErrorMessage = (detail: unknown) => {
+    if (detail && typeof detail === 'object') {
+      const obj = detail as {
+        message?: string;
+        missing_placeholders?: string[];
+        field?: string;
+      };
+      if (obj.field === 'prompt_template') {
+        if (Array.isArray(obj.missing_placeholders) && obj.missing_placeholders.length > 0) {
+          return `缺少占位符: ${obj.missing_placeholders.join(', ')}`;
+        }
+        if (obj.message) {
+          return obj.message;
+        }
+      }
+    }
+    const detailText = typeof detail === 'string' ? detail : '';
+    if (detailText.includes('missing required placeholders')) {
+      const found = detailText.match(/\{[^}]+\}/g);
+      if (found && found.length > 0) {
+        return `缺少占位符: ${found.join(', ')}`;
+      }
+      return detailText;
+    }
+    return '';
+  };
 
   const onFinish = async (values: Record<string, unknown>) => {
     setLoading(true);
@@ -141,14 +266,22 @@ function LLMTab({
         top_p: values.top_p,
         top_p_enabled: useTopP,
         max_tokens: values.max_tokens,
-        prompt_template: values.prompt_template,
+        prompt_template: buildPromptTemplatePayload(values.prompt_template),
       });
+      form.setFields([{ name: 'prompt_template', errors: [] }]);
       message.success('保存成功');
       setHasConfig(true);
       setConfigExpanded(false); // Collapse on successful save
       await loadUsage();
-    } catch {
-      message.error('保存失败');
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: unknown } }; message?: string };
+      const promptError = buildPromptFieldErrorMessage(err?.response?.data?.detail);
+      if (promptError) {
+        form.setFields([{ name: 'prompt_template', errors: [promptError] }]);
+        message.error(promptError);
+      } else {
+        message.error('保存失败');
+      }
     } finally {
       setLoading(false);
     }
@@ -179,7 +312,7 @@ function LLMTab({
         top_p: values.top_p,
         top_p_enabled: useTopP,
         max_tokens: values.max_tokens,
-        prompt_template: values.prompt_template,
+        prompt_template: buildPromptTemplatePayload(values.prompt_template),
       });
 
       await testLLMConfig(purpose);
@@ -221,7 +354,7 @@ function LLMTab({
           extra={
             <Space>
               <Button onClick={handleTest}>测试</Button>
-              <Button type="link" onClick={() => setConfigExpanded(!configExpanded)}>
+              <Button onClick={() => setConfigExpanded(!configExpanded)}>
                 {configExpanded ? '收起' : '展开'}
               </Button>
             </Space>
@@ -289,11 +422,85 @@ function LLMTab({
             <Form.Item name="max_tokens" label="Max Tokens">
               <InputNumber min={1} max={128000} style={{ width: 120 }} />
             </Form.Item>
-            <Form.Item name="prompt_template" label="Prompt 模板">
-              <Input.TextArea rows={8} placeholder="输入 prompt 模板" />
+            <Form.Item
+              name="prompt_template"
+              label={
+                <Space size={6}>
+                  <span>Prompt 模板</span>
+                  {isPromptTemplateEnhanced ? <Text type="warning">*</Text> : null}
+                  {isPromptTemplateEnhanced ? (
+                    <Tooltip title={enhancementConfig.labelHint}>
+                      <Text type="secondary">(需预留字段)</Text>
+                    </Tooltip>
+                  ) : null}
+                </Space>
+              }
+              rules={
+                isPromptTemplateEnhanced
+                  ? [
+                      {
+                        validator: async (_, value) => {
+                          const fullTemplate = buildPromptTemplateWithFixedPart(
+                            String(value ?? ''),
+                            fixedPromptPart || enhancementConfig.fixedJsonOutput
+                          );
+                          const missed = enhancementConfig.requiredPlaceholders.filter(
+                            (token) => !fullTemplate.includes(token)
+                          );
+                          if (missed.length > 0) {
+                            throw new Error(`缺少占位符: ${missed.join(', ')}`);
+                          }
+                        },
+                      },
+                    ]
+                  : undefined
+              }
+            >
+              <Input.TextArea rows={10} placeholder="输入 prompt 模板可编辑部分" />
             </Form.Item>
+            {isPromptTemplateEnhanced ? (
+              <>
+                <Space style={{ marginBottom: 8 }}>
+                  <Tooltip title="CTRL + Z撤销填入">
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        form.setFieldValue('prompt_template', enhancementConfig.promptExample);
+                      }}
+                    >
+                      填入示例模版
+                    </Button>
+                  </Tooltip>
+                  {enhancementConfig.requiredPlaceholders.map((token) => (
+                    <Tag key={token}>{token}</Tag>
+                  ))}
+                </Space>
+                <Collapse
+                  items={[
+                    {
+                      key: 'fixed-json',
+                      label: '固定 JSON 区块（只读）',
+                      children: (
+                        <>
+                          <Alert
+                            type="info"
+                            showIcon
+                            style={{ marginBottom: 8 }}
+                            message="返回 JSON 格式为系统固定区块，不可在上方编辑框修改"
+                          />
+                          <Input.TextArea rows={12} value={fixedPromptPart} readOnly />
+                          <Button size="small" style={{ marginTop: 8 }} onClick={handleCopyFixedJsonBlock}>
+                            一键复制固定 JSON 区块
+                          </Button>
+                        </>
+                      ),
+                    },
+                  ]}
+                />
+              </>
+            ) : null}
             <Form.Item>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button htmlType="submit" loading={loading}>
                 保存
               </Button>
             </Form.Item>

@@ -41,15 +41,15 @@ class Orchestrator:
             for t in todos
         ])
         agent_desc = "\n".join([
-            f"- ID={a.id}; 名称={a.name}; tags={json.dumps(a.capability_tags or [], ensure_ascii=False)}; 描述={a.description or ''}; input_params={json.dumps(a.input_params or {}, ensure_ascii=False)}; output_params={json.dumps(a.output_params or {}, ensure_ascii=False)}"
+            f"- ID={a.id}; 名称={a.name}; tags={json.dumps(a.capability_tags or [], ensure_ascii=False)}; 描述={a.description or ''}; input_params={json.dumps(self._filter_prompt_input_params(getattr(a, 'input_params', {})), ensure_ascii=False)}; output_params={json.dumps(a.output_params or {}, ensure_ascii=False)}"
             for a in agents
         ]) or "- 无"
         wagent_desc = "\n".join([
-            f"- ID={w.id}; 名称={w.name}; tags={json.dumps(w.capability_tags or [], ensure_ascii=False)}; 描述={w.description or ''}; input_params={json.dumps(w.input_params or {}, ensure_ascii=False)}; output_params={json.dumps(w.output_params or {}, ensure_ascii=False)}"
+            f"- ID={w.id}; 名称={w.name}; tags={json.dumps(w.capability_tags or [], ensure_ascii=False)}; 描述={w.description or ''}; input_params={json.dumps(self._filter_prompt_input_params(getattr(w, 'input_params', {})), ensure_ascii=False)}; output_params={json.dumps(w.output_params or {}, ensure_ascii=False)}"
             for w in wagents
         ]) or "- 无"
         workflow_desc = "\n".join([
-            f"- ID={wf.id}; 名称={wf.name}; tags={json.dumps(wf.capability_tags or [], ensure_ascii=False)}; 描述={wf.description or ''}; input_params={json.dumps(wf.input_params or {}, ensure_ascii=False)}; output_params={json.dumps(wf.output_params or {}, ensure_ascii=False)}"
+            f"- ID={wf.id}; 名称={wf.name}; tags={json.dumps(wf.capability_tags or [], ensure_ascii=False)}; 描述={wf.description or ''}; input_params={json.dumps(self._filter_prompt_input_params(getattr(wf, 'input_params', {})), ensure_ascii=False)}; output_params={json.dumps(wf.output_params or {}, ensure_ascii=False)}"
             for wf in workflows
         ]) or "- 无"
 
@@ -159,6 +159,7 @@ JSON 必须包含以下字段：
         normalized.setdefault("priority", "medium")
         normalized.setdefault("estimated_duration_minutes", 30)
         normalized.setdefault("steps", [])
+        normalized.setdefault("editable_input_keys", [])
 
         recommended_id = normalized.get("recommended_id")
         if recommended_id:
@@ -166,8 +167,16 @@ JSON 必须包含以下字段：
             target = by_id.get(recommended_id)
             if target:
                 normalized.setdefault("recommended_name", getattr(target, "name", ""))
-                candidate_params = self._coerce_params_map(getattr(target, "input_params", {}) or {})
-                normalized["input_params"] = self._merge_input_params(candidate_params, normalized.get("input_params") or {}, todos)
+                raw_schema = getattr(target, "input_params", {}) or {}
+                candidate_params = self._coerce_params_map(raw_schema)
+                editable_keys = self._extract_user_editable_keys(raw_schema)
+                normalized["editable_input_keys"] = editable_keys
+                normalized["input_params"] = self._merge_input_params(
+                    candidate_params,
+                    normalized.get("input_params") or {},
+                    todos,
+                    editable_keys,
+                )
         elif normalized.get("plan_type") == "new_wagent":
             normalized.setdefault("recommended_name", "新建W-Agent工作流")
             normalized["steps"] = self._build_new_wagent_steps(workflows, normalized.get("steps"))
@@ -185,9 +194,13 @@ JSON 必须包含以下字段：
         normalized["deadline"] = deadline
         return normalized
 
-    def _merge_input_params(self, schema_params: dict, llm_params: dict, todos) -> dict:
+    def _merge_input_params(self, schema_params: dict, llm_params: dict, todos, editable_keys: list[str] | None = None) -> dict:
         schema_map = self._coerce_params_map(schema_params)
         merged = self._coerce_params_map(llm_params)
+        if editable_keys is not None:
+            editable_set = set(editable_keys)
+            schema_map = {k: v for k, v in schema_map.items() if k in editable_set}
+            merged = {k: v for k, v in merged.items() if k in editable_set}
         title = todos[0].title if todos else ""
         description = todos[0].description if todos and todos[0].description else ""
         due_date = todos[0].due_date.isoformat() if todos and todos[0].due_date else None
@@ -206,6 +219,44 @@ JSON 必须包含以下字段：
             elif value not in (None, "") and not isinstance(value, (dict, list)):
                 merged[key] = value
         return merged
+
+    def _extract_user_editable_keys(self, raw_params) -> list[str]:
+        if not isinstance(raw_params, list):
+            if isinstance(raw_params, dict):
+                return list(raw_params.keys())
+            return []
+        has_explicit_flag = any(isinstance(item, dict) and "user_fill_enabled" in item for item in raw_params)
+        keys: list[str] = []
+        for item in raw_params:
+            if hasattr(item, "model_dump"):
+                item = item.model_dump()
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("key") or item.get("field")
+            if not name:
+                continue
+            if has_explicit_flag:
+                if item.get("user_fill_enabled"):
+                    keys.append(str(name))
+            else:
+                keys.append(str(name))
+        return keys
+
+    def _filter_prompt_input_params(self, raw_params):
+        if isinstance(raw_params, list):
+            has_explicit_flag = any(isinstance(item, dict) and "user_fill_enabled" in item for item in raw_params)
+            filtered = []
+            for item in raw_params:
+                if hasattr(item, "model_dump"):
+                    item = item.model_dump()
+                if not isinstance(item, dict):
+                    continue
+                # Prompt only includes params for model filling; user_fill_enabled=True means user fills manually.
+                if has_explicit_flag and item.get("user_fill_enabled"):
+                    continue
+                filtered.append(item)
+            return filtered
+        return raw_params or {}
 
     def _coerce_params_map(self, raw_params) -> dict:
         if raw_params is None:
@@ -329,7 +380,13 @@ JSON 必须包含以下字段：
                 "recommended_id": recommended.id,
                 "recommended_name": recommended.name,
                 "reason": f"推荐使用 {recommended.name} 处理此任务",
-                "input_params": self._merge_input_params(getattr(recommended, 'input_params', {}) or {}, {}, todos),
+                "input_params": self._merge_input_params(
+                    getattr(recommended, 'input_params', {}) or {},
+                    {},
+                    todos,
+                    self._extract_user_editable_keys(getattr(recommended, 'input_params', {}) or {}),
+                ),
+                "editable_input_keys": self._extract_user_editable_keys(getattr(recommended, 'input_params', {}) or {}),
                 "priority": "medium",
                 "estimated_duration_minutes": 30,
                 "start_time": start_time,

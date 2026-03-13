@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Row,
   Col,
@@ -9,6 +9,7 @@ import {
   Button,
   Modal,
   Popconfirm,
+  Select,
   message,
   Typography,
   Empty,
@@ -22,26 +23,21 @@ import {
   testDataSource,
   syncDataSource,
   deleteDataSource,
+  getAgents,
 } from '@/api/config';
-import ParamTable, { type ParamDefinition } from '@/components/ParamTable';
+import type { ParamDefinition } from '@/components/ParamTable';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
-const normalizeParams = (
-  arr?: {
-    name?: string;
-    type?: string;
-    required?: boolean;
-    default?: string | null;
-    description?: string | null;
-  }[]
-): ParamDefinition[] => {
+const normalizeParams = (arr?: ParamDefinition[]): ParamDefinition[] => {
   if (!Array.isArray(arr)) return [];
   return arr.map((p) => ({
     name: p.name ?? '',
     type: p.type ?? 'string',
     required: p.required ?? false,
+    user_fill_enabled: p.user_fill_enabled ?? false,
     default: p.default ?? '',
+    value: p.value ?? '',
     description: p.description ?? '',
   }));
 };
@@ -50,6 +46,7 @@ interface DataSourceItem {
   id: string;
   type: string;
   name?: string;
+  agent_id?: string;
   dify_endpoint?: string;
   dify_api_key?: string;
   input_params?: ParamDefinition[];
@@ -57,8 +54,31 @@ interface DataSourceItem {
   is_enabled?: boolean;
 }
 
+interface AgentItem {
+  id: string;
+  name: string;
+  is_enabled?: boolean;
+  dify_endpoint?: string;
+  dify_api_key?: string;
+  input_params?: ParamDefinition[];
+  output_params?: ParamDefinition[];
+}
+
+const inferAgentIdForDatasource = (ds: DataSourceItem, agents: AgentItem[]) => {
+  if (ds.agent_id) {
+    return ds.agent_id;
+  }
+  const endpoint = ds.dify_endpoint ?? '';
+  const apiKey = ds.dify_api_key ?? '';
+  const found = agents.find(
+    (agent) => (agent.dify_endpoint ?? '') === endpoint && (agent.dify_api_key ?? '') === apiKey
+  );
+  return found?.id;
+};
+
 function DataSourceCard({
   ds,
+  agents,
   onUpdate,
   onToggle,
   onTest,
@@ -66,7 +86,8 @@ function DataSourceCard({
   onDelete,
 }: {
   ds: DataSourceItem;
-  onUpdate: (dsType: string, values: Record<string, unknown>) => Promise<void>;
+  agents: AgentItem[];
+  onUpdate: (dsType: string, selectedAgentId: string, inputValues: Record<string, string>) => Promise<void>;
   onToggle: (dsType: string) => Promise<void>;
   onTest: (dsType: string) => Promise<void>;
   onSync: (dsType: string) => Promise<void>;
@@ -75,24 +96,55 @@ function DataSourceCard({
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
 
+  const selectedAgentId = Form.useWatch('agent_id', form) as string | undefined;
+  const selectedAgent = useMemo(
+    () => agents.find((agent) => agent.id === selectedAgentId),
+    [agents, selectedAgentId]
+  );
+  const allParams = useMemo(
+    () => normalizeParams(selectedAgent?.input_params),
+    [selectedAgent]
+  );
+
   useEffect(() => {
-    form.setFieldsValue({
-      name: ds.name ?? ds.type,
-      dify_endpoint: ds.dify_endpoint ?? '',
-      dify_api_key: ds.dify_api_key ?? '',
-      input_params: normalizeParams(ds.input_params),
-      output_params: normalizeParams(ds.output_params),
-    });
-  }, [ds, form]);
+    const inferredAgentId = inferAgentIdForDatasource(ds, agents);
+    const baseValues: Record<string, unknown> = { agent_id: inferredAgentId };
+    const inferredAgent = agents.find((agent) => agent.id === inferredAgentId);
+    const paramsToRender = normalizeParams(inferredAgent?.input_params);
+
+    const savedMap = new Map<string, string>();
+    for (const item of normalizeParams(ds.input_params)) {
+      savedMap.set(item.name, String(item.value ?? ''));
+    }
+
+    const inputValues = paramsToRender.reduce<Record<string, string>>((acc, param) => {
+      if (savedMap.has(param.name)) {
+        acc[param.name] = savedMap.get(param.name) ?? '';
+      } else {
+        acc[param.name] = String(param.default ?? '');
+      }
+      return acc;
+    }, {});
+
+    baseValues.input_param_values = inputValues;
+    form.setFieldsValue(baseValues);
+  }, [ds, agents, form]);
 
   const handleFinish = async (values: Record<string, unknown>) => {
     setLoading(true);
     try {
-      await onUpdate(ds.type, values);
+      const selected = String(values.agent_id ?? '');
+      const inputValues = (values.input_param_values as Record<string, string> | undefined) ?? {};
+      await onUpdate(ds.type, selected, inputValues);
     } finally {
       setLoading(false);
     }
   };
+
+  const options = agents.map((agent) => ({
+    value: agent.id,
+    label: `${agent.name}${agent.is_enabled === false ? '（已禁用）' : ''}`,
+  }));
 
   return (
     <Card
@@ -109,28 +161,38 @@ function DataSourceCard({
         layout="vertical"
         onFinish={handleFinish}
         initialValues={{
-          name: ds.name ?? ds.type,
-          dify_endpoint: ds.dify_endpoint ?? '',
-          dify_api_key: ds.dify_api_key ?? '',
-          input_params: normalizeParams(ds.input_params),
-          output_params: normalizeParams(ds.output_params),
+          agent_id: inferAgentIdForDatasource(ds, agents),
         }}
       >
-        <Form.Item name="name" label="名称">
-          <Input placeholder="数据源名称" />
+        <Form.Item
+          name="agent_id"
+          label="绑定 Agent"
+          rules={[{ required: true, message: '请选择一个已导入的 Agent' }]}
+          extra="该数据源将直接复用所选 Agent 的 Endpoint、API Key 和参数定义"
+        >
+          <Select
+            placeholder="请选择已导入 Agent"
+            options={options}
+          />
         </Form.Item>
-        <Form.Item name="dify_endpoint" label="Endpoint">
-          <Input placeholder="API 地址" />
-        </Form.Item>
-        <Form.Item name="dify_api_key" label="API Key">
-          <Input.Password placeholder="API Key" />
-        </Form.Item>
-        <Form.Item name="input_params" label="输入参数">
-          <ParamTable showRequired />
-        </Form.Item>
-        <Form.Item name="output_params" label="输出参数">
-          <ParamTable showRequired={false} />
-        </Form.Item>
+        {options.length === 0 ? (
+          <Text type="warning">暂无可选 Agent，请先在 Agent 管理中创建</Text>
+        ) : null}
+        {allParams.length > 0 ? (
+          <Card size="small" title="输入参数" style={{ marginBottom: 12 }}>
+            {allParams.map((param) => (
+              <Form.Item
+                key={param.name}
+                name={['input_param_values', param.name]}
+                label={param.name}
+                tooltip={param.description || undefined}
+                rules={param.required ? [{ required: true, message: `请填写 ${param.name}` }] : undefined}
+              >
+                <Input placeholder={String(param.default ?? '')} />
+              </Form.Item>
+            ))}
+          </Card>
+        ) : null}
         <Form.Item>
           <Button type="primary" htmlType="submit" loading={loading}>
             保存
@@ -162,9 +224,23 @@ function DataSourceCard({
 
 export default function ConfigDataSourcesPage() {
   const [dataSources, setDataSources] = useState<DataSourceItem[]>([]);
+  const [agents, setAgents] = useState<AgentItem[]>([]);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createForm] = Form.useForm();
   const [creating, setCreating] = useState(false);
+
+  const loadAgents = async () => {
+    try {
+      // Backend currently enforces size<=100, so request within allowed range.
+      const res = await getAgents({ page: 1, size: 100 });
+      const body = (res as { data: unknown }).data;
+      const payload = (body as { data?: { items?: AgentItem[] } })?.data ?? body;
+      const items = (payload as { items?: AgentItem[] })?.items;
+      setAgents(Array.isArray(items) ? items : []);
+    } catch {
+      setAgents([]);
+    }
+  };
 
   const loadDataSources = async () => {
     try {
@@ -179,6 +255,7 @@ export default function ConfigDataSourcesPage() {
 
   useEffect(() => {
     loadDataSources();
+    loadAgents();
   }, []);
 
   const handleCreate = async () => {
@@ -193,9 +270,13 @@ export default function ConfigDataSourcesPage() {
       setCreateModalOpen(false);
       createForm.resetFields();
       loadDataSources();
+      loadAgents();
     } catch (e: unknown) {
       if (e && typeof e === 'object' && 'errorFields' in e) return;
-      message.error('创建失败');
+      const err = e as { response?: unknown };
+      if (!err?.response) {
+        message.error('创建失败');
+      }
     } finally {
       setCreating(false);
     }
@@ -203,14 +284,26 @@ export default function ConfigDataSourcesPage() {
 
   const handleUpdate = async (
     dsType: string,
-    values: Record<string, unknown>
+    selectedAgentId: string,
+    inputValues: Record<string, string>
   ) => {
+    const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
+    if (!selectedAgent) {
+      message.error('未找到所选 Agent，请刷新后重试');
+      return;
+    }
+
+    const mergedInputParams = normalizeParams(selectedAgent.input_params).map((param) => ({
+      ...param,
+      value: Object.prototype.hasOwnProperty.call(inputValues, param.name)
+        ? String(inputValues[param.name] ?? '')
+        : String(param.default ?? ''),
+    }));
+
     await updateDataSource(dsType, {
-      name: values.name,
-      dify_endpoint: values.dify_endpoint,
-      dify_api_key: values.dify_api_key,
-      input_params: values.input_params,
-      output_params: values.output_params,
+      name: dsType,
+      agent_id: selectedAgent.id,
+      input_params: mergedInputParams,
     });
     message.success('保存成功');
     loadDataSources();
@@ -228,10 +321,14 @@ export default function ConfigDataSourcesPage() {
 
   const handleTest = async (dsType: string) => {
     try {
-      await testDataSource(dsType);
-      message.success('连接测试成功');
-    } catch {
-      message.error('连接测试失败');
+      const res = await testDataSource(dsType);
+      const body = (res as { data: { data?: { latency_ms?: number } } }).data;
+      const latency = body?.data?.latency_ms;
+      message.success(`连接测试成功${latency != null ? `（延迟 ${latency}ms）` : ''}`);
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string };
+      const detail = err?.response?.data?.detail || err?.message;
+      message.error(detail || '连接测试失败');
     }
   };
 
@@ -292,6 +389,7 @@ export default function ConfigDataSourcesPage() {
             <Col xs={24} lg={8} key={ds.id}>
               <DataSourceCard
                 ds={ds}
+                agents={agents}
                 onUpdate={handleUpdate}
                 onToggle={handleToggle}
                 onTest={handleTest}

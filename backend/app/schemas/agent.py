@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
 
@@ -7,7 +7,10 @@ class ParamDefinition(BaseModel):
     name: str
     type: str
     required: bool = False
+    # True means this param should be filled by user in config/confirm forms.
+    user_fill_enabled: bool = False
     default: str | None = None
+    value: str | None = None
     description: str | None = None
 
 

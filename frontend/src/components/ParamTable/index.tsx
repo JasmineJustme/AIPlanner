@@ -5,6 +5,7 @@ import {
   Select,
   Switch,
   Popconfirm,
+  Tooltip,
 } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
@@ -13,7 +14,9 @@ export interface ParamDefinition {
   name: string;
   type: string;
   required: boolean;
+  user_fill_enabled?: boolean;
   default?: string;
+  value?: string;
   description?: string;
 }
 
@@ -21,6 +24,7 @@ interface Props {
   value?: ParamDefinition[];
   onChange?: (params: ParamDefinition[]) => void;
   showRequired?: boolean;
+  showUserFillSwitch?: boolean;
   readonly?: boolean;
 }
 
@@ -37,6 +41,7 @@ export default function ParamTable({
   value = [],
   onChange,
   showRequired = true,
+  showUserFillSwitch = false,
   readonly = false,
 }: Props) {
   const [dataSource, setDataSource] = useState<ParamDefinition[]>([]);
@@ -50,7 +55,9 @@ export default function ParamTable({
       name: '',
       type: 'string',
       required: false,
+      user_fill_enabled: false,
       default: '',
+      value: '',
       description: '',
     };
     const next = [...dataSource, newRow];
@@ -118,6 +125,26 @@ export default function ParamTable({
                   checked={dataSource[index]?.required}
                   onChange={(v) => handleChange(index, 'required', v)}
                 />
+              ),
+          },
+        ]
+      : []),
+    ...(showUserFillSwitch
+      ? [
+          {
+            title: '用户填写',
+            dataIndex: 'user_fill_enabled',
+            width: 110,
+            render: (_: boolean, __: ParamDefinition, index: number) =>
+              readonly ? (
+                dataSource[index]?.user_fill_enabled ? '是' : '否'
+              ) : (
+                <Tooltip title="打开后该参数将由您自行填入">
+                  <Switch
+                    checked={!!dataSource[index]?.user_fill_enabled}
+                    onChange={(v) => handleChange(index, 'user_fill_enabled', v)}
+                  />
+                </Tooltip>
               ),
           },
         ]

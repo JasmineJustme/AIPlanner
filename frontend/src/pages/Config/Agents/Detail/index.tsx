@@ -18,13 +18,15 @@ import ParamTable, { type ParamDefinition } from '@/components/ParamTable';
 
 const { Title } = Typography;
 
-const normalizeParams = (arr?: { name?: string; type?: string; required?: boolean; default?: string | null; description?: string | null }[]): ParamDefinition[] => {
+const normalizeParams = (arr?: { name?: string; type?: string; required?: boolean; user_fill_enabled?: boolean; default?: string | null; value?: string | null; description?: string | null }[]): ParamDefinition[] => {
   if (!Array.isArray(arr)) return [];
   return arr.map((p) => ({
     name: p.name ?? '',
     type: p.type ?? 'string',
     required: p.required ?? false,
+    user_fill_enabled: p.user_fill_enabled ?? false,
     default: p.default ?? '',
+    value: p.value ?? '',
     description: p.description ?? '',
   }));
 };
@@ -154,7 +156,7 @@ export default function ConfigAgentsDetailPage() {
 
         <Card title="输入参数" style={{ marginBottom: 16 }}>
           <Form.Item name="input_params">
-            <ParamTable showRequired />
+            <ParamTable showRequired showUserFillSwitch />
           </Form.Item>
         </Card>
 

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -10,6 +10,9 @@ class DataSource(TimestampMixin, Base):
     __tablename__ = "datasources"
     type: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    agent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     dify_endpoint: Mapped[str | None] = mapped_column(String(500), nullable=True)
     dify_api_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     input_params: Mapped[dict] = mapped_column(JSON, default=list)
