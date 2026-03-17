@@ -43,3 +43,6 @@ export const batchConfirmReview = (todoIds: string[]) =>
 
 export const batchRejectReview = (todoIds: string[]) =>
   client.post('/todos/review/batch-reject', { todo_ids: todoIds });
+
+export const smartDiscoverTodos = () =>
+  client.post('/todos/smart-discover');

@@ -25,9 +25,12 @@ export interface NotificationChannel {
   id: string;
   channel_type: string;
   name: string;
+  agent_id?: string;
   dify_endpoint: string;
   dify_api_key: string;
+  input_params?: ParamDefinition[];
   input_mapping: Record<string, unknown>;
+  message_field?: string | null;
   is_enabled: boolean;
 }
 

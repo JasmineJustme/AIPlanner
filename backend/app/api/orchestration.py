@@ -462,6 +462,13 @@ def _apply_selected_executor(entry: dict, plan_type: str, recommended_id: str | 
     entry["suggested_wagent"] = _build_recommended_target("wagent", recommended_id, recommended_name) if plan_type in {"wagent", "new_wagent"} else None
 
 
+def _mark_analysis_error(entry: dict, error: str) -> str:
+    # On analysis errors keep the record visible in pending_confirm, and retain error for UI hints.
+    entry["status"] = "pending_confirm"
+    entry["error"] = error
+    return "pending_confirm"
+
+
 @router.post("/submit")
 async def submit_orchestration(
     payload: SubmitPayload,
@@ -532,14 +539,15 @@ async def submit_orchestration(
     }
     _orchestration_store[orch_id] = entry
 
+    event_status = entry["status"]
     try:
         plan_result = await orchestrator.orchestrate(db, payload.todo_ids)
 
         if "error" in plan_result:
-            entry["status"] = "failed"
-            entry["error"] = plan_result["error"]
+            event_status = _mark_analysis_error(entry, plan_result["error"])
         else:
             entry["status"] = plan_result.get("status", "pending_confirm")
+            event_status = entry["status"]
             entry["plan"] = _apply_recurrence_to_plan(plan_result.get("plan"), recurrence_defaults)
             entry["llm_reason"] = plan_result.get("llm_reason")
 
@@ -556,12 +564,11 @@ async def submit_orchestration(
 
     except Exception as e:
         logger.error(f"Orchestration failed for {orch_id}: {e}")
-        entry["status"] = "failed"
-        entry["error"] = f"编排分析失败: {str(e)}"
+        event_status = _mark_analysis_error(entry, f"编排分析失败: {str(e)}")
 
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
-    await _broadcast_orchestration_complete(orch_id, entry["status"], entry.get("error"))
+    await _broadcast_orchestration_complete(orch_id, event_status, entry.get("error"))
     return {
         "code": 200,
         "message": "success",
@@ -791,14 +798,15 @@ async def retry_orchestration(
     entry["suggested_agent"] = None
     entry["suggested_wagent"] = None
 
+    event_status = entry["status"]
     try:
         plan_result = await orchestrator.orchestrate(db, todo_ids)
 
         if "error" in plan_result:
-            entry["status"] = "failed"
-            entry["error"] = plan_result["error"]
+            event_status = _mark_analysis_error(entry, plan_result["error"])
         else:
             entry["status"] = plan_result.get("status", "pending_confirm")
+            event_status = entry["status"]
             entry["plan"] = plan_result.get("plan")
             entry["llm_reason"] = plan_result.get("llm_reason")
 
@@ -815,12 +823,11 @@ async def retry_orchestration(
 
     except Exception as e:
         logger.error(f"Orchestration retry failed for {orch_id}: {e}")
-        entry["status"] = "failed"
-        entry["error"] = f"重新编排失败: {str(e)}"
+        event_status = _mark_analysis_error(entry, f"重新编排失败: {str(e)}")
 
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
-    await _broadcast_orchestration_complete(orch_id, entry["status"], entry.get("error"))
+    await _broadcast_orchestration_complete(orch_id, event_status, entry.get("error"))
     return {
         "code": 200,
         "message": "success",

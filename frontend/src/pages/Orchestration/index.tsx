@@ -527,7 +527,8 @@ function OrchestrationCard({
               </div>
 
               <div style={{ marginBottom: 16 }}>
-                <ReasonCollapse reason={getReason()} />
+                <Text strong>原因：</Text>
+                <Text style={{ marginLeft: 8 }}>{getReason()}</Text>
               </div>
 
               {getPlanType() === 'new_wagent' && detail.plan?.steps && (
@@ -750,7 +751,11 @@ export default function OrchestrationPage() {
       return;
     }
     if (event?.status === 'pending_confirm') {
-      message.success('LLM 分析完成，编排已进入待确认');
+      if (event.error) {
+        message.warning(`编排分析出现错误：${event.error}`);
+      } else {
+        message.success('LLM 分析完成，编排已进入待确认');
+      }
       return;
     }
     if (event?.status === 'failed') {

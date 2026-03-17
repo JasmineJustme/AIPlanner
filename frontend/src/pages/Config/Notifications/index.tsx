@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Row,
   Col,
@@ -7,35 +7,79 @@ import {
   Input,
   Switch,
   Button,
+  Select,
   message,
   Typography,
+  Tag,
 } from 'antd';
 import {
   getNotificationChannels,
   updateNotificationChannel,
   toggleNotificationChannel,
   testNotificationChannel,
+  getAgents,
 } from '@/api/config';
+import type { ParamDefinition } from '@/components/ParamTable';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 const CHANNELS = [
   { key: 'email_workflow', name: '邮件工作流' },
   { key: 'wechat_workflow', name: '微信工作流' },
 ] as const;
 
+const normalizeParams = (arr?: ParamDefinition[]): ParamDefinition[] => {
+  if (!Array.isArray(arr)) return [];
+  return arr.map((p) => ({
+    name: p.name ?? '',
+    type: p.type ?? 'string',
+    required: p.required ?? false,
+    user_fill_enabled: p.user_fill_enabled ?? false,
+    default: p.default ?? '',
+    value: p.value ?? '',
+    description: p.description ?? '',
+  }));
+};
+
 interface ChannelConfig {
+  id: string;
+  channel_type: string;
   name?: string;
+  agent_id?: string;
   dify_endpoint?: string;
   dify_api_key?: string;
-  input_mapping?: Record<string, string>;
+  input_params?: ParamDefinition[];
   is_enabled?: boolean;
+  message_field?: string;
 }
+
+interface AgentItem {
+  id: string;
+  name: string;
+  is_enabled?: boolean;
+  dify_endpoint?: string;
+  dify_api_key?: string;
+  input_params?: ParamDefinition[];
+}
+
+const inferAgentIdForChannel = (channel: ChannelConfig, agents: AgentItem[]) => {
+  if (channel.agent_id) {
+    return channel.agent_id;
+  }
+  const endpoint = channel.dify_endpoint ?? '';
+  const apiKey = channel.dify_api_key ?? '';
+  const found = agents.find(
+    (agent) => (agent.dify_endpoint ?? '') === endpoint
+      && (agent.dify_api_key ?? '') === apiKey
+  );
+  return found?.id;
+};
 
 function NotificationCard({
   channelKey,
   label,
   config,
+  agents,
   onUpdate,
   onToggle,
   onTest,
@@ -43,9 +87,12 @@ function NotificationCard({
   channelKey: string;
   label: string;
   config: ChannelConfig;
+  agents: AgentItem[];
   onUpdate: (
     channelKey: string,
-    values: Record<string, unknown>
+    selectedAgentId: string,
+    inputValues: Record<string, string>,
+    messageField?: string
   ) => Promise<void>;
   onToggle: (channelKey: string) => Promise<void>;
   onTest: (channelKey: string) => Promise<void>;
@@ -53,85 +100,116 @@ function NotificationCard({
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
 
+  const selectedAgentId = Form.useWatch('agent_id', form) as string | undefined;
+  const selectedAgent = useMemo(
+    () => agents.find((agent) => agent.id === selectedAgentId),
+    [agents, selectedAgentId]
+  );
+  const allParams = useMemo(() => normalizeParams(selectedAgent?.input_params), [selectedAgent]);
+  const selectedMessageField = Form.useWatch('message_field', form) as string | undefined;
+  const userEditableParams = useMemo(
+    () => allParams.filter((param) => param.name !== selectedMessageField),
+    [allParams, selectedMessageField]
+  );
+
   useEffect(() => {
-    const mapping = config.input_mapping ?? {};
+    const inferredAgentId = inferAgentIdForChannel(config, agents);
+    const selected = agents.find((agent) => agent.id === inferredAgentId);
+    const selectedParams = normalizeParams(selected?.input_params);
+
+    const saved = new Map<string, string>();
+    for (const param of normalizeParams(config.input_params)) {
+      saved.set(param.name, String(param.value ?? ''));
+    }
+
+    const prefill = selectedParams.reduce<Record<string, string>>((acc, param) => {
+      acc[param.name] = saved.has(param.name)
+        ? (saved.get(param.name) ?? '')
+        : String(param.default ?? '');
+      return acc;
+    }, {});
+
     form.setFieldsValue({
       name: config.name ?? label,
-      dify_endpoint: config.dify_endpoint ?? '',
-      dify_api_key: config.dify_api_key ?? '',
-      input_mapping: JSON.stringify(mapping, null, 2),
+      agent_id: inferredAgentId,
+      input_param_values: prefill,
+      message_field: config.message_field,
     });
-  }, [config, label, form]);
+  }, [agents, config, form, label]);
 
   const handleFinish = async (values: Record<string, unknown>) => {
     setLoading(true);
     try {
-      let input_mapping: Record<string, string> = {};
-      try {
-        const raw = values.input_mapping as string;
-        if (raw?.trim()) {
-          input_mapping = JSON.parse(raw) as Record<string, string>;
-        }
-      } catch {
-        message.error('input_mapping 必须是合法 JSON');
-        setLoading(false);
-        return;
-      }
-      await onUpdate(channelKey, {
-        name: values.name,
-        dify_endpoint: values.dify_endpoint,
-        dify_api_key: values.dify_api_key,
-        input_mapping,
-      });
+      const selected = String(values.agent_id ?? '');
+      const inputValues = (values.input_param_values as Record<string, string> | undefined) ?? {};
+      const messageField = String(values.message_field ?? '').trim() || undefined;
+      await onUpdate(channelKey, selected, inputValues, messageField);
     } finally {
       setLoading(false);
     }
   };
 
+  const options = agents.map((agent) => ({
+    value: agent.id,
+    label: `${agent.name}${agent.is_enabled === false ? '（已禁用）' : ''}`,
+  }));
+
   return (
     <Card
       title={config.name ?? label}
-      extra={
-        <Switch
-          checked={config.is_enabled ?? false}
-          onChange={() => onToggle(channelKey)}
-        />
-      }
+      extra={<Switch checked={config.is_enabled ?? false} onChange={() => onToggle(channelKey)} />}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        onFinish={handleFinish}
-        initialValues={{
-          name: config.name ?? label,
-          dify_endpoint: config.dify_endpoint ?? '',
-          dify_api_key: config.dify_api_key ?? '',
-          input_mapping: JSON.stringify(config.input_mapping ?? {}, null, 2),
-        }}
-      >
+      <div style={{ marginBottom: 12 }}>
+        <Tag color={config.is_enabled ? 'success' : 'default'}>{config.is_enabled ? '已启用' : '已停用'}</Tag>
+        <Text type="secondary" style={{ marginLeft: 8 }}>渠道类型: {channelKey}</Text>
+      </div>
+      <Form form={form} layout="vertical" onFinish={handleFinish}>
         <Form.Item name="name" label="名称">
           <Input placeholder="渠道名称" />
         </Form.Item>
-        <Form.Item name="dify_endpoint" label="Dify Endpoint">
-          <Input placeholder="https://api.dify.ai/v1" />
-        </Form.Item>
-        <Form.Item name="dify_api_key" label="Dify API Key">
-          <Input.Password placeholder="API Key" />
-        </Form.Item>
         <Form.Item
-          name="input_mapping"
-          label="Input Mapping (JSON)"
-          extra="key-value 映射，JSON 格式"
+          name="agent_id"
+          label="绑定 Agent"
+          rules={[{ required: true, message: '请选择一个已导入的 Agent' }]}
+          extra="提醒渠道将复用所选 Agent 的 Endpoint、API Key 和参数定义"
         >
-          <Input.TextArea rows={6} placeholder='{"key": "value"}' />
+          <Select placeholder="请选择已导入 Agent" options={options} />
         </Form.Item>
-        <Form.Item>
-          <Button type="primary" htmlType="submit" loading={loading}>
-            保存
-          </Button>
-          <Button style={{ marginLeft: 8 }} onClick={() => onTest(channelKey)}>
-            测试
-          </Button>
+        {allParams.length > 0 ? (
+          <Form.Item
+            name="message_field"
+            label="消息字段"
+            extra="选择后，提醒内容将自动写入该字段，且该字段不会作为手动输入参数展示"
+          >
+            <Select
+              allowClear
+              placeholder="请选择接收提醒内容的字段"
+              options={allParams.map((param) => ({ value: param.name, label: param.name }))}
+            />
+          </Form.Item>
+        ) : null}
+        {userEditableParams.length > 0 ? (
+          <Card size="small" title="输入参数" style={{ marginBottom: 12 }}>
+            {userEditableParams.map((param) => (
+              <Form.Item
+                key={param.name}
+                name={['input_param_values', param.name]}
+                label={param.name}
+                tooltip={param.description || undefined}
+                rules={param.required ? [{ required: true, message: `请填写 ${param.name}` }] : undefined}
+              >
+                <Input placeholder={String(param.default ?? '')} />
+              </Form.Item>
+            ))}
+          </Card>
+        ) : (
+          <Text type="secondary">
+            {allParams.length > 0 ? '当前可手动配置参数为空（可能都由系统自动填充）' : '所选 Agent 没有可配置输入参数'}
+          </Text>
+        )}
+        <Form.Item style={{ marginTop: 12 }}>
+          <Button type="primary" htmlType="submit" loading={loading}>保存</Button>
+          <Button style={{ marginLeft: 8 }} onClick={() => onTest(channelKey)}>测试</Button>
         </Form.Item>
       </Form>
     </Card>
@@ -139,29 +217,69 @@ function NotificationCard({
 }
 
 export default function ConfigNotificationsPage() {
-  const [data, setData] = useState<Record<string, ChannelConfig>>({});
+  const [channels, setChannels] = useState<Record<string, ChannelConfig>>({});
+  const [agents, setAgents] = useState<AgentItem[]>([]);
+
+  const loadAgents = async () => {
+    try {
+      const res = await getAgents({ page: 1, size: 100 });
+      const body = (res as { data: unknown }).data;
+      const payload = (body as { data?: { items?: AgentItem[] } })?.data ?? body;
+      const items = (payload as { items?: AgentItem[] })?.items;
+      setAgents(Array.isArray(items) ? items : []);
+    } catch {
+      setAgents([]);
+    }
+  };
 
   const loadChannels = async () => {
     try {
       const res = await getNotificationChannels();
       const body = (res as { data: unknown }).data;
-      const payload =
-        (body as { data?: Record<string, ChannelConfig> })?.data ?? body;
-      setData((payload as Record<string, ChannelConfig>) ?? {});
+      const payload = (body as { data?: ChannelConfig[] })?.data ?? body;
+      const rows = Array.isArray(payload) ? payload : [];
+      const byType = rows.reduce<Record<string, ChannelConfig>>((acc, item) => {
+        if (item?.channel_type) {
+          acc[item.channel_type] = item;
+        }
+        return acc;
+      }, {});
+      setChannels(byType);
     } catch {
-      setData({});
+      setChannels({});
     }
   };
 
   useEffect(() => {
     loadChannels();
+    loadAgents();
   }, []);
 
   const handleUpdate = async (
     channelKey: string,
-    values: Record<string, unknown>
+    selectedAgentId: string,
+    inputValues: Record<string, string>,
+    messageField?: string
   ) => {
-    await updateNotificationChannel(channelKey, values);
+    const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
+    if (!selectedAgent) {
+      message.error('未找到所选 Agent，请刷新后重试');
+      return;
+    }
+
+    const mergedInputParams = normalizeParams(selectedAgent.input_params).map((param) => ({
+      ...param,
+      value: Object.prototype.hasOwnProperty.call(inputValues, param.name)
+        ? String(inputValues[param.name] ?? '')
+        : String(param.default ?? ''),
+    }));
+
+    await updateNotificationChannel(channelKey, {
+      name: channels[channelKey]?.name ?? CHANNELS.find((item) => item.key === channelKey)?.name ?? channelKey,
+      agent_id: selectedAgent.id,
+      input_params: mergedInputParams,
+      message_field: messageField ?? null,
+    });
     message.success('保存成功');
     loadChannels();
   };
@@ -196,7 +314,8 @@ export default function ConfigNotificationsPage() {
             <NotificationCard
               channelKey={key}
               label={name}
-              config={data[key] ?? {}}
+              config={channels[key] ?? ({ channel_type: key, id: key, name } as ChannelConfig)}
+              agents={agents}
               onUpdate={handleUpdate}
               onToggle={handleToggle}
               onTest={handleTest}

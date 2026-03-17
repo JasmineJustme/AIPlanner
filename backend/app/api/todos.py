@@ -3,7 +3,9 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.engine.todo_discovery import todo_discovery_engine
 from app.models import Todo
+from app.services.llm_client import LLMServiceError
 from pydantic import BaseModel
 from app.schemas.todo import TodoCreate, TodoUpdate, TodoResponse, TodoReviewConfirm
 
@@ -308,3 +310,20 @@ async def batch_reject_review(
         todo.review_status = "rejected"
     await db.flush()
     return {"code": 200, "message": "success", "data": {"rejected": len(items)}}
+
+
+@router.post("/smart-discover")
+async def smart_discover_todos(
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        data = await todo_discovery_engine.smart_discover(db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except LLMServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return {
+        "code": 200,
+        "message": "success",
+        "data": data,
+    }

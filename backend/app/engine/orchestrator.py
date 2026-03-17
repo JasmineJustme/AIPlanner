@@ -93,21 +93,23 @@ JSON 必须包含以下字段：
 4. 若选择 new_wagent，请给出 steps；否则 steps 可为空数组。
 5. recommended_name 必须与 recommended_id 对应。
 """
-
-        prompt = (
-            llm_config.prompt_template.format(
-                current_time=current_time,
-                todos=todo_desc,
-                agents=agent_desc,
-                wagents=wagent_desc,
-                workflows=workflow_desc,
-            )
-            if all(token in (llm_config.prompt_template or "") for token in ["{todos}", "{agents}", "{wagents}"])
-            else default_prompt
-        )
+        template = llm_config.prompt_template or ""
+        required_placeholders = ["{current_time}", "{todo_desc}", "{agent_desc}", "{wagent_desc}", "{workflow_desc}"]
+        prompt_context = {
+            "current_time": current_time,
+            "todo_desc": todo_desc,
+            "agent_desc": agent_desc,
+            "wagent_desc": wagent_desc,
+            "workflow_desc": workflow_desc,
+        }
+        if all(token in template for token in required_placeholders):
+            prompt = self._render_prompt_template(template, prompt_context)
+        else:
+            prompt = default_prompt
 
         # 5. Call LLM
         try:
+            # logger.info("{}",llm_config.prompt_template)
             logger.info("Orchestration LLM prompt for todo_ids={}:\n{}", todo_ids, prompt)
             response = await llm_client.chat(llm_config, [
                 {"role": "system", "content": "你是一个智能任务编排助手，擅长为任务选择执行器并补全 workflow/agent 参数与调度时间。"},
@@ -133,6 +135,14 @@ JSON 必须包含以下字段：
         except Exception as e:
             logger.error(f"Orchestration LLM call failed: {e}")
             return self._create_mock_plan(todos, agents, wagents, workflows)
+
+    def _render_prompt_template(self, template: str, values: dict[str, str]) -> str:
+        rendered = template
+        # Replace known placeholders directly so extra braces in user prompt (for JSON examples)
+        # do not trigger str.format parsing errors.
+        for key, value in values.items():
+            rendered = rendered.replace(f"{{{key}}}", value)
+        return rendered
 
     def _parse_plan_response(self, content: str) -> dict:
         text = (content or "").strip()

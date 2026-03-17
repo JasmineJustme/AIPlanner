@@ -30,8 +30,8 @@ const { Title, Text } = Typography;
 
 const PURPOSES = [
   { key: 'todo_analysis', label: '待办梳理 LLM' },
+  { key: 'todo_dedup', label: '待办任务去重 LLM' },
   { key: 'orchestration', label: '智能编排 LLM' },
-  { key: 'scheduling', label: '智能调度 LLM' },
 ] as const;
 
 const PROVIDER_OPTIONS = [
@@ -56,6 +56,11 @@ const REQUIRED_TODO_ANALYSIS_PLACEHOLDERS = [
   '{todo_desc}',
 ] as const;
 
+const REQUIRED_TODO_DEDUP_PLACEHOLDERS = [
+  '{current_time}',
+  '{todo_desc}',
+] as const;
+
 const FIXED_JSON_MARKER_START = '# ==== FIXED_JSON_OUTPUT_FORMAT_START (DO NOT EDIT) ====';
 const FIXED_JSON_MARKER_END = '# ==== FIXED_JSON_OUTPUT_FORMAT_END ====';
 
@@ -63,9 +68,13 @@ const ORCHESTRATION_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请�
 
 const TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "summary": "待办摘要",\n  "priority": "high | medium | low",\n  "urgency_reason": "紧急性原因",\n  "suggested_actions": ["动作1", "动作2"],\n  "risks": ["风险1", "风险2"],\n  "follow_up_questions": ["问题1", "问题2"]\n}\n${FIXED_JSON_MARKER_END}`;
 
+const TODO_DEDUP_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "duplicates": [\n    {\n      "source_id": "重复任务ID",\n      "target_id": "保留任务ID",\n      "reason": "判重理由"\n    }\n  ]\n}\n若没有重复任务，请返回 {"duplicates": []}。\n${FIXED_JSON_MARKER_END}`;
+
 const ORCHESTRATION_PROMPT_EXAMPLE = `分析以下待办任务，从可用的Agent、W-Agent和Workflow中选择最佳方案来完成任务。\n\n当前时间：\n{current_time}\n\n待办任务：\n{todo_desc}\n\n可用Agent：\n{agent_desc}\n\n可用W-Agent：\n{wagent_desc}\n\n可用Workflow：\n{workflow_desc}\n\n要求：\n1. 结合任务描述和候选 input_params 自动补全最合适的 input_params。\n2. 必须结合上方“当前时间”为任务生成 start_time 与 deadline。\n3. deadline 不能晚于任务中最早的 due_date；如没有 due_date，请结合当前时间与 estimated_duration_minutes 给出合理 deadline。\n4. 若选择 new_wagent，请给出 steps；否则 steps 可为空数组。\n5. recommended_name 必须与 recommended_id 对应。`;
 
 const TODO_ANALYSIS_PROMPT_EXAMPLE = `请对待办进行结构化梳理，并给出执行建议。\n\n当前时间：\n{current_time}\n\n待办任务：\n{todo_desc}\n\n要求：\n1. 输出必须与固定 JSON 结构一致。\n2. priority 仅可为 high / medium / low。\n3. suggested_actions 给出可直接执行的动作清单。\n4. risks 和 follow_up_questions 为空时返回空数组。`;
+
+const TODO_DEDUP_PROMPT_EXAMPLE = `请识别待办列表中语义重复或高度相似的任务，并给出去重建议。\n\n当前时间：\n{current_time}\n\n待办列表：\n{todo_desc}\n\n要求：\n1. 仅输出固定 JSON 结构。\n2. source_id 必须是需要标记为重复的任务，target_id 是建议保留的任务。\n3. 每条重复关系必须给出简要 reason。\n4. 不确定时不要强行合并，返回空数组。`;
 
 const PROMPT_TEMPLATE_ENHANCEMENT_CONFIG: Record<string, {
   requiredPlaceholders: readonly string[];
@@ -84,6 +93,12 @@ const PROMPT_TEMPLATE_ENHANCEMENT_CONFIG: Record<string, {
     labelHint: '梳理 prompt 必须预留指定字段',
     fixedJsonOutput: TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT,
     promptExample: TODO_ANALYSIS_PROMPT_EXAMPLE,
+  },
+  todo_dedup: {
+    requiredPlaceholders: REQUIRED_TODO_DEDUP_PLACEHOLDERS,
+    labelHint: '去重 prompt 必须预留指定字段',
+    fixedJsonOutput: TODO_DEDUP_FIXED_JSON_OUTPUT_FORMAT,
+    promptExample: TODO_DEDUP_PROMPT_EXAMPLE,
   },
 };
 

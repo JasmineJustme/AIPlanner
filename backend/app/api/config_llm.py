@@ -10,7 +10,7 @@ from app.services.llm_client import llm_client
 
 router = APIRouter(prefix="/config/llm", tags=["config-llm"])
 
-LLM_PURPOSES = ["chat", "extract", "summarize", "todo_analysis", "orchestration", "scheduling"]
+LLM_PURPOSES = ["chat", "extract", "summarize", "todo_analysis", "todo_dedup", "orchestration"]
 REQUIRED_PROMPT_PLACEHOLDERS_BY_PURPOSE = {
     "orchestration": [
         "{current_time}",
@@ -20,6 +20,10 @@ REQUIRED_PROMPT_PLACEHOLDERS_BY_PURPOSE = {
         "{workflow_desc}",
     ],
     "todo_analysis": [
+        "{current_time}",
+        "{todo_desc}",
+    ],
+    "todo_dedup": [
         "{current_time}",
         "{todo_desc}",
     ],
@@ -55,10 +59,31 @@ def _validate_orchestration_prompt_template(purpose: str, prompt_template: str |
         )
 
 
+def _normalize_purpose_alias(purpose: str) -> str:
+    return "todo_dedup" if purpose == "scheduling" else purpose
+
+
+async def _migrate_scheduling_to_todo_dedup_if_needed(db: AsyncSession) -> None:
+    # Reuse old "scheduling" config data under the new "todo_dedup" purpose.
+    dedup_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "todo_dedup"))
+    dedup_cfg = dedup_result.scalar_one_or_none()
+    scheduling_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "scheduling"))
+    scheduling_cfg = scheduling_result.scalar_one_or_none()
+    if not scheduling_cfg:
+        return
+    if dedup_cfg:
+        await db.delete(scheduling_cfg)
+        await db.flush()
+        return
+    scheduling_cfg.purpose = "todo_dedup"
+    await db.flush()
+
+
 @router.get("")
 async def list_llm_configs(
     db: AsyncSession = Depends(get_db),
 ):
+    await _migrate_scheduling_to_todo_dedup_if_needed(db)
     result = await db.execute(select(LLMConfig))
     items = result.scalars().all()
     existing = {c.purpose for c in items}
@@ -80,6 +105,8 @@ async def get_llm_config(
     purpose: str,
     db: AsyncSession = Depends(get_db),
 ):
+    purpose = _normalize_purpose_alias(purpose)
+    await _migrate_scheduling_to_todo_dedup_if_needed(db)
     result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
     cfg = result.scalar_one_or_none()
     if not cfg:
@@ -96,6 +123,8 @@ async def update_llm_config(
     payload: LLMConfigUpdate,
     db: AsyncSession = Depends(get_db),
 ):
+    purpose = _normalize_purpose_alias(purpose)
+    await _migrate_scheduling_to_todo_dedup_if_needed(db)
     result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
     cfg = result.scalar_one_or_none()
     if not cfg:
@@ -123,6 +152,8 @@ async def test_llm_config(
     purpose: str,
     db: AsyncSession = Depends(get_db),
 ):
+    purpose = _normalize_purpose_alias(purpose)
+    await _migrate_scheduling_to_todo_dedup_if_needed(db)
     result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
     cfg = result.scalar_one_or_none()
     if not cfg:
@@ -171,6 +202,8 @@ async def get_llm_usage(
     purpose: str,
     db: AsyncSession = Depends(get_db),
 ):
+    purpose = _normalize_purpose_alias(purpose)
+    await _migrate_scheduling_to_todo_dedup_if_needed(db)
     result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
     cfg = result.scalar_one_or_none()
     if not cfg:

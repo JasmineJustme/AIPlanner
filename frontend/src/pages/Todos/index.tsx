@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -16,9 +16,10 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
-import { PlusOutlined, RedoOutlined, UploadOutlined } from '@ant-design/icons';
+import { PlusOutlined, QuestionCircleOutlined, RedoOutlined, UploadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -27,6 +28,7 @@ import {
   deleteTodo,
   getTodos,
   rerunTodo,
+  smartDiscoverTodos,
   updateTodo,
 } from '@/api/todos';
 import { submitOrchestration } from '@/api/orchestration';
@@ -70,6 +72,9 @@ export default function TodosPage() {
   const [saving, setSaving] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [blinkTodoId, setBlinkTodoId] = useState<string | null>(null);
+  const blinkTimerRef = useRef<number | null>(null);
   const [data, setData] = useState<{ items: Todo[]; total: number; page: number; size: number; pages: number }>({
     items: [],
     total: 0,
@@ -307,6 +312,47 @@ export default function TodosPage() {
     }
   };
 
+  const handleSmartDiscover = async () => {
+    setDiscovering(true);
+    try {
+      const res = await smartDiscoverTodos();
+      const body = (res as { data: { data?: { created_count?: number; dedup_count?: number } } }).data;
+      const payload = (body?.data ?? body) as { created_count?: number; dedup_count?: number };
+      const createdCount = Number(payload.created_count ?? 0);
+      const dedupCount = Number(payload.dedup_count ?? 0);
+      message.success(`智能发掘完成：新增 ${createdCount} 条，去重标记 ${dedupCount} 条`);
+      await loadTodos();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string };
+      message.error(err?.response?.data?.detail || err?.message || '智能发掘失败');
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const focusTodoRow = (todoId: string) => {
+    const target = document.getElementById(`todo-row-${todoId}`);
+    if (!target) {
+      message.warning('目标任务不在当前页，请调整筛选或翻页后查看');
+      return;
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setBlinkTodoId(todoId);
+    if (blinkTimerRef.current) {
+      window.clearTimeout(blinkTimerRef.current);
+    }
+    blinkTimerRef.current = window.setTimeout(() => {
+      setBlinkTodoId(null);
+      blinkTimerRef.current = null;
+    }, 1400);
+  };
+
+  useEffect(() => () => {
+    if (blinkTimerRef.current) {
+      window.clearTimeout(blinkTimerRef.current);
+    }
+  }, []);
+
   const getExecutionMode = (record: Todo) => record.execution_mode || TodoExecutionMode.System;
   const isUserExecution = (record: Todo) => getExecutionMode(record) === TodoExecutionMode.User;
   const isPendingLike = (record: Todo) =>
@@ -336,6 +382,7 @@ export default function TodosPage() {
   const renderExpandedRow = (record: Todo) => {
     const executionMode = getExecutionMode(record);
     const modeConfig = TODO_EXECUTION_MODE_MAP[executionMode] || TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System];
+    const duplicateTarget = record.duplicate_of ? data.items.find((item) => item.id === record.duplicate_of) : undefined;
 
     return (
       <div style={{ margin: 0, padding: 12, backgroundColor: '#fafafa', borderRadius: 4 }}>
@@ -368,6 +415,19 @@ export default function TodosPage() {
                 : record.status === TodoStatus.Orchestrating
                   ? '正在编排分析中'
                   : '无'}
+          </Descriptions.Item>
+          <Descriptions.Item label="添加时间">{formatDate(record.created_at)}</Descriptions.Item>
+          <Descriptions.Item label="重复任务">
+            {record.duplicate_of ? (
+              <Space>
+                <Text type="warning">与以下任务重复：</Text>
+                <Button type="link" size="small" onClick={() => focusTodoRow(record.duplicate_of!)}>
+                  {duplicateTarget?.title || `任务 ${record.duplicate_of}`}
+                </Button>
+              </Space>
+            ) : (
+              '无'
+            )}
           </Descriptions.Item>
         </Descriptions>
       </div>
@@ -418,6 +478,13 @@ export default function TodosPage() {
       dataIndex: 'due_date',
       key: 'due_date',
       width: 140,
+      render: (d: string) => formatDate(d),
+    },
+    {
+      title: '添加时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 160,
       render: (d: string) => formatDate(d),
     },
     {
@@ -542,6 +609,16 @@ export default function TodosPage() {
 
   return (
     <div>
+      <style>
+        {`
+          .todo-duplicate-row td { background: #fff1f0 !important; }
+          .todo-blink-row td { animation: todoBlink 0.7s ease-in-out 1; }
+          @keyframes todoBlink {
+            0% { background: #ffe58f; }
+            100% { background: inherit; }
+          }
+        `}
+      </style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>
           待办任务
@@ -549,6 +626,9 @@ export default function TodosPage() {
         <Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
             新建待办
+          </Button>
+          <Button onClick={handleSmartDiscover} loading={discovering}>
+            智能发掘待办
           </Button>
           <Button icon={<UploadOutlined />} onClick={handleBatchImport} loading={importLoading}>
             批量导入
@@ -617,6 +697,8 @@ export default function TodosPage() {
             pagination={false}
             locale={{ emptyText: '暂无用户执行任务' }}
             expandable={{ expandedRowRender: renderExpandedRow }}
+            rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
+            onRow={(record) => ({ id: `todo-row-${record.id}` })}
           />
         </Card>
 
@@ -638,6 +720,8 @@ export default function TodosPage() {
             pagination={false}
             locale={{ emptyText: '暂无系统执行任务' }}
             expandable={{ expandedRowRender: renderExpandedRow }}
+            rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
+            onRow={(record) => ({ id: `todo-row-${record.id}` })}
           />
         </Card>
       </Space>
@@ -702,7 +786,23 @@ export default function TodosPage() {
                 <>
                   <Form.Item
                     name="recurrence_cron"
-                    label="循环表达式 (cron)"
+                    label={
+                      <Space size={6}>
+                        <span>循环表达式 (cron)</span>
+                        <Tooltip
+                          title={
+                            <div>
+                              <div>格式：分 时 日 月 周</div>
+                              <div>例如：`0 9 * * 1-5` 表示工作日 09:00</div>
+                              <div>`0 15 * * 5` 表示每周五 15:00</div>
+                              <div>`30 8 1 * *` 表示每月 1 日 08:30</div>
+                            </div>
+                          }
+                        >
+                          <QuestionCircleOutlined style={{ color: '#999' }} />
+                        </Tooltip>
+                      </Space>
+                    }
                     rules={[{ required: true, message: '请输入 cron 表达式' }]}
                   >
                     <Input placeholder="例如: 0 9 * * 1-5" />

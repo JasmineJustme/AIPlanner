@@ -64,6 +64,7 @@ export const TodoSource = {
   Email: 'email',
   Calendar: 'calendar',
   Project: 'project',
+  System: 'system',
 } as const;
 export type TodoSource = (typeof TodoSource)[keyof typeof TodoSource];
 
@@ -72,6 +73,7 @@ export const SOURCE_MAP: Record<string, { color: string; text: string; icon: str
   [TodoSource.Email]: { color: '#1890ff', text: '邮件', icon: 'MailOutlined' },
   [TodoSource.Calendar]: { color: '#52c41a', text: '日程', icon: 'CalendarOutlined' },
   [TodoSource.Project]: { color: '#fa8c16', text: '项目', icon: 'ProjectOutlined' },
+  [TodoSource.System]: { color: '#722ed1', text: '系统', icon: 'ProjectOutlined' },
 };
 
 export const ReviewStatus = {
