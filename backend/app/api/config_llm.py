@@ -21,7 +21,8 @@ REQUIRED_PROMPT_PLACEHOLDERS_BY_PURPOSE = {
     ],
     "todo_analysis": [
         "{current_time}",
-        "{todo_desc}",
+        "{datasource_info}",
+        "{responsibilities}",
     ],
     "todo_dedup": [
         "{current_time}",

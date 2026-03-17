@@ -53,7 +53,8 @@ const REQUIRED_ORCHESTRATION_PLACEHOLDERS = [
 
 const REQUIRED_TODO_ANALYSIS_PLACEHOLDERS = [
   '{current_time}',
-  '{todo_desc}',
+  '{datasource_info}',
+  '{responsibilities}',
 ] as const;
 
 const REQUIRED_TODO_DEDUP_PLACEHOLDERS = [
@@ -66,13 +67,13 @@ const FIXED_JSON_MARKER_END = '# ==== FIXED_JSON_OUTPUT_FORMAT_END ====';
 
 const ORCHESTRATION_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "plan_type": "agent | wagent | new_wagent",\n  "recommended_id": "推荐的 agent/wagent id，没有可留空字符串",\n  "recommended_name": "推荐名称",\n  "reason": "推荐原因",\n  "input_params": {"参数名": "参数值"},\n  "priority": "high | medium | low",\n  "estimated_duration_minutes": 30,\n  "start_time": "ISO8601 时间，例如 2026-03-09T09:00:00，必须结合当前时间判断，无法判断可用 null",\n  "deadline": "ISO8601 时间，例如 2026-03-09T18:00:00，需结合当前时间、预计时长和待办截止时间判断，无法判断可用 null",\n  "steps": [{"order": 1, "workflow_name": "步骤名"}]\n}\n${FIXED_JSON_MARKER_END}`;
 
-const TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "summary": "待办摘要",\n  "priority": "high | medium | low",\n  "urgency_reason": "紧急性原因",\n  "suggested_actions": ["动作1", "动作2"],\n  "risks": ["风险1", "风险2"],\n  "follow_up_questions": ["问题1", "问题2"]\n}\n${FIXED_JSON_MARKER_END}`;
+const TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "todos": [\n    {\n      "todo_summary": "待办摘要",\n      "task_description": "详细任务描述",\n      "priority": "high | medium | low",\n      "urgency_reason": "紧急性原因",\n      "start_recurring": false,\n      "confirm_by": null,\n      "executor": "user | system",\n      "tags": ["标签1", "标签2"],\n      "project": "项目名称"\n    }\n  ]\n}\n若没有可发掘待办，请返回 {"todos": []}。\n${FIXED_JSON_MARKER_END}`;
 
 const TODO_DEDUP_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "duplicates": [\n    {\n      "source_id": "重复任务ID",\n      "target_id": "保留任务ID",\n      "reason": "判重理由"\n    }\n  ]\n}\n若没有重复任务，请返回 {"duplicates": []}。\n${FIXED_JSON_MARKER_END}`;
 
 const ORCHESTRATION_PROMPT_EXAMPLE = `分析以下待办任务，从可用的Agent、W-Agent和Workflow中选择最佳方案来完成任务。\n\n当前时间：\n{current_time}\n\n待办任务：\n{todo_desc}\n\n可用Agent：\n{agent_desc}\n\n可用W-Agent：\n{wagent_desc}\n\n可用Workflow：\n{workflow_desc}\n\n要求：\n1. 结合任务描述和候选 input_params 自动补全最合适的 input_params。\n2. 必须结合上方“当前时间”为任务生成 start_time 与 deadline。\n3. deadline 不能晚于任务中最早的 due_date；如没有 due_date，请结合当前时间与 estimated_duration_minutes 给出合理 deadline。\n4. 若选择 new_wagent，请给出 steps；否则 steps 可为空数组。\n5. recommended_name 必须与 recommended_id 对应。`;
 
-const TODO_ANALYSIS_PROMPT_EXAMPLE = `请对待办进行结构化梳理，并给出执行建议。\n\n当前时间：\n{current_time}\n\n待办任务：\n{todo_desc}\n\n要求：\n1. 输出必须与固定 JSON 结构一致。\n2. priority 仅可为 high / medium / low。\n3. suggested_actions 给出可直接执行的动作清单。\n4. risks 和 follow_up_questions 为空时返回空数组。`;
+const TODO_ANALYSIS_PROMPT_EXAMPLE = `请根据数据源信息与工作职责，发掘潜在的待办任务。\n\n当前时间：\n{current_time}\n\n数据源信息：\n{datasource_info}\n\n工作职责：\n{responsibilities}\n\n要求：\n1. 输出必须与固定 JSON 结构一致。\n2. priority 仅可为 high / medium / low。\n3. 只输出可执行、可落地的待办。\n4. 若无待办则返回空数组。`;
 
 const TODO_DEDUP_PROMPT_EXAMPLE = `请识别待办列表中语义重复或高度相似的任务，并给出去重建议。\n\n当前时间：\n{current_time}\n\n待办列表：\n{todo_desc}\n\n要求：\n1. 仅输出固定 JSON 结构。\n2. source_id 必须是需要标记为重复的任务，target_id 是建议保留的任务。\n3. 每条重复关系必须给出简要 reason。\n4. 不确定时不要强行合并，返回空数组。`;
 

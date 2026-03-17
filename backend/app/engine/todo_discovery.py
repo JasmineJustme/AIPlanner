@@ -251,20 +251,22 @@ class TodoDiscoveryEngine:
             raise ValueError("待办梳理 LLM 未配置")
 
         current_time = datetime.now(UTC).replace(tzinfo=None, microsecond=0).isoformat()
-        todo_desc = (
-            "[数据源同步信息]\n"
-            f"{datasource_text}\n\n"
-            "[工作职责]\n"
-            f"{responsibility_text}"
-        )
         default_prompt = (
             "请根据数据源同步信息和工作职责，识别可执行待办。\n\n"
             "当前时间:\n{current_time}\n\n"
-            "输入上下文:\n{todo_desc}\n\n"
+            "数据源信息:\n{datasource_info}\n\n"
+            "工作职责:\n{responsibilities}\n\n"
             "仅返回 JSON，字段必须完整："
             "{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\"}]}"
         )
-        prompt = self._render_prompt_template(llm_cfg.prompt_template or default_prompt, {"current_time": current_time, "todo_desc": todo_desc})
+        prompt = self._render_prompt_template(
+            llm_cfg.prompt_template or default_prompt,
+            {
+                "current_time": current_time,
+                "datasource_info": datasource_text,
+                "responsibilities": responsibility_text,
+            },
+        )
         if '"todos"' not in prompt:
             prompt = (
                 f"{prompt}\n\n"
