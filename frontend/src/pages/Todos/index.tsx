@@ -22,6 +22,7 @@ import {
 import { PlusOutlined, QuestionCircleOutlined, RedoOutlined, UploadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
+import { useNavigate } from 'react-router-dom';
 import {
   completeTodo,
   createTodo,
@@ -45,6 +46,7 @@ import {
   TodoExecutionMode,
   TodoStatus,
 } from '@/constants/status';
+import { ROUTES } from '@/constants/routes';
 
 const { Title, Text } = Typography;
 
@@ -66,6 +68,7 @@ const EXECUTION_MODE_OPTIONS = Object.entries(TODO_EXECUTION_MODE_MAP).map(([k, 
 }));
 
 export default function TodosPage() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
@@ -73,6 +76,7 @@ export default function TodosPage() {
   const [importLoading, setImportLoading] = useState(false);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   const [blinkTodoId, setBlinkTodoId] = useState<string | null>(null);
   const blinkTimerRef = useRef<number | null>(null);
   const [data, setData] = useState<{ items: Todo[]; total: number; page: number; size: number; pages: number }>({
@@ -598,15 +602,6 @@ export default function TodosPage() {
     );
   }
 
-  if (data.total === 0) {
-    return (
-      <div>
-        <Title level={3}>待办任务</Title>
-        <Text type="secondary">暂无待办记录，请先创建任务。</Text>
-      </div>
-    );
-  }
-
   return (
     <div>
       <style>
@@ -627,6 +622,7 @@ export default function TodosPage() {
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
             新建待办
           </Button>
+          <Button onClick={() => navigate(ROUTES.TODOS_REVIEW)}>梳理结果确认</Button>
           <Button onClick={handleSmartDiscover} loading={discovering}>
             智能发掘待办
           </Button>
@@ -634,8 +630,12 @@ export default function TodosPage() {
             批量导入
           </Button>
           <Space>
-            <span>列表</span>
-            <Button disabled>看板</Button>
+            <Button type={viewMode === 'list' ? 'primary' : 'default'} onClick={() => setViewMode('list')}>
+              列表
+            </Button>
+            <Button type={viewMode === 'board' ? 'primary' : 'default'} onClick={() => setViewMode('board')}>
+              看板
+            </Button>
           </Space>
         </Space>
       </div>
@@ -678,53 +678,73 @@ export default function TodosPage() {
         />
       </Space>
 
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
-        <Card
-          title="用户执行模块"
-          extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.User].color}>{userTodos.length}</Tag>}
-        >
-          <Alert
-            type="info"
-            showIcon
-            message="用户执行任务只做展示与提醒；待确认时可完成、编辑和删除，已完成后可删除或重新执行。"
-            style={{ marginBottom: 16 }}
-          />
-          <Table
-            rowKey="id"
-            loading={loading}
-            columns={columns}
-            dataSource={userTodos}
-            pagination={false}
-            locale={{ emptyText: '暂无用户执行任务' }}
-            expandable={{ expandedRowRender: renderExpandedRow }}
-            rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
-            onRow={(record) => ({ id: `todo-row-${record.id}` })}
-          />
+      {data.total === 0 ? (
+        <Card>
+          <div style={{ padding: '16px 0' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="暂无待办记录，可通过新建、批量导入或智能发掘生成任务。"
+              style={{ marginBottom: 16 }}
+            />
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
+              立即新建待办
+            </Button>
+          </div>
         </Card>
+      ) : viewMode === 'board' ? (
+        <Card title="看板视图（预览）">
+          <Text type="secondary">V1 当前以列表视图为主，看板视图即将上线。</Text>
+        </Card>
+      ) : (
+        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+          <Card
+            title="用户执行模块"
+            extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.User].color}>{userTodos.length}</Tag>}
+          >
+            <Alert
+              type="info"
+              showIcon
+              message="用户执行任务只做展示与提醒；待确认时可完成、编辑和删除，已完成后可删除或重新执行。"
+              style={{ marginBottom: 16 }}
+            />
+            <Table
+              rowKey="id"
+              loading={loading}
+              columns={columns}
+              dataSource={userTodos}
+              pagination={false}
+              locale={{ emptyText: '暂无用户执行任务' }}
+              expandable={{ expandedRowRender: renderExpandedRow }}
+              rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
+              onRow={(record) => ({ id: `todo-row-${record.id}` })}
+            />
+          </Card>
 
-        <Card
-          title="系统执行模块"
-          extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System].color}>{systemTodos.length}</Tag>}
-        >
-          <Alert
-            type="warning"
-            showIcon
-            message="系统执行任务待确认时可确认、编辑和删除；编排中或调度中不可操作；已完成后可删除或重新执行。"
-            style={{ marginBottom: 16 }}
-          />
-          <Table
-            rowKey="id"
-            loading={loading}
-            columns={columns}
-            dataSource={systemTodos}
-            pagination={false}
-            locale={{ emptyText: '暂无系统执行任务' }}
-            expandable={{ expandedRowRender: renderExpandedRow }}
-            rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
-            onRow={(record) => ({ id: `todo-row-${record.id}` })}
-          />
-        </Card>
-      </Space>
+          <Card
+            title="系统执行模块"
+            extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System].color}>{systemTodos.length}</Tag>}
+          >
+            <Alert
+              type="warning"
+              showIcon
+              message="系统执行任务待确认时可确认、编辑和删除；编排中或调度中不可操作；已完成后可删除或重新执行。"
+              style={{ marginBottom: 16 }}
+            />
+            <Table
+              rowKey="id"
+              loading={loading}
+              columns={columns}
+              dataSource={systemTodos}
+              pagination={false}
+              locale={{ emptyText: '暂无系统执行任务' }}
+              expandable={{ expandedRowRender: renderExpandedRow }}
+              rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
+              onRow={(record) => ({ id: `todo-row-${record.id}` })}
+            />
+          </Card>
+        </Space>
+      )}
 
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
         <Pagination
