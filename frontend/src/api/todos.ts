@@ -45,4 +45,4 @@ export const batchRejectReview = (todoIds: string[]) =>
   client.post('/todos/review/batch-reject', { todo_ids: todoIds });
 
 export const smartDiscoverTodos = () =>
-  client.post('/todos/smart-discover');
+  client.post('/todos/smart-discover', undefined, { timeout: 180000 });

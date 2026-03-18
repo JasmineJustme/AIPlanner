@@ -1,7 +1,7 @@
 import math
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schedule import SchedulePlan, ScheduleTask
@@ -42,9 +42,16 @@ class SchedulerEngine:
             select(ScheduleTask)
             .where(
                 ScheduleTask.status == "pending",
-                ScheduleTask.scheduled_at <= now,
+                or_(
+                    ScheduleTask.current_scheduled_at <= now,
+                    ScheduleTask.current_scheduled_at.is_(None),
+                ),
             )
-            .order_by(ScheduleTask.priority.desc(), ScheduleTask.scheduled_at)
+            .order_by(
+                ScheduleTask.priority.desc(),
+                ScheduleTask.current_scheduled_at,
+                ScheduleTask.original_scheduled_at,
+            )
             .limit(available_slots)
         )
         tasks = (await db.execute(pending_q)).scalars().all()
@@ -106,7 +113,12 @@ class SchedulerEngine:
             task.status = "retrying"
             # Exponential backoff
             delay_minutes = math.pow(2, task.retry_count - 1)
-            task.scheduled_at = _now_local_naive() + timedelta(minutes=delay_minutes)
+            next_run_at = _now_local_naive() + timedelta(minutes=delay_minutes)
+            if task.original_scheduled_at is None:
+                task.original_scheduled_at = task.scheduled_at
+            task.current_scheduled_at = next_run_at
+            task.scheduled_at = next_run_at
+            task.delay_count = int(task.delay_count or 0) + 1
             task.status = "pending"
             task.completed_at = None
         else:

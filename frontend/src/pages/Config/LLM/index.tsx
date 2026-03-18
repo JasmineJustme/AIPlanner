@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   Tabs,
   Card,
@@ -8,7 +8,6 @@ import {
   InputNumber,
   Slider,
   Button,
-  Descriptions,
   message,
   Typography,
   Switch,
@@ -22,9 +21,7 @@ import {
   getLLMConfig,
   updateLLMConfig,
   testLLMConfig,
-  getLLMUsage,
 } from '@/api/config';
-import type { LLMUsageSummary } from '@/types/settings';
 
 const { Title, Text } = Typography;
 
@@ -62,14 +59,11 @@ const REQUIRED_TODO_DEDUP_PLACEHOLDERS = [
   '{todo_desc}',
 ] as const;
 
-const FIXED_JSON_MARKER_START = '# ==== FIXED_JSON_OUTPUT_FORMAT_START (DO NOT EDIT) ====';
-const FIXED_JSON_MARKER_END = '# ==== FIXED_JSON_OUTPUT_FORMAT_END ====';
+const ORCHESTRATION_FIXED_JSON_OUTPUT_FORMAT = `请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "plan_type": "agent | wagent | new_wagent",\n  "recommended_id": "推荐的 agent/wagent id，没有可留空字符串",\n  "recommended_name": "推荐名称",\n  "reason": "推荐原因",\n  "input_params": {"参数名": "参数值"},\n  "priority": "high | medium | low",\n  "estimated_duration_minutes": 30,\n  "start_time": "ISO8601 时间，例如 2026-03-09T09:00:00，必须结合当前时间判断，无法判断可用 null",\n  "deadline": "ISO8601 时间，例如 2026-03-09T18:00:00，需结合当前时间、预计时长和待办截止时间判断，无法判断可用 null",\n  "steps": [{"order": 1, "workflow_name": "步骤名"}]\n}`;
 
-const ORCHESTRATION_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "plan_type": "agent | wagent | new_wagent",\n  "recommended_id": "推荐的 agent/wagent id，没有可留空字符串",\n  "recommended_name": "推荐名称",\n  "reason": "推荐原因",\n  "input_params": {"参数名": "参数值"},\n  "priority": "high | medium | low",\n  "estimated_duration_minutes": 30,\n  "start_time": "ISO8601 时间，例如 2026-03-09T09:00:00，必须结合当前时间判断，无法判断可用 null",\n  "deadline": "ISO8601 时间，例如 2026-03-09T18:00:00，需结合当前时间、预计时长和待办截止时间判断，无法判断可用 null",\n  "steps": [{"order": 1, "workflow_name": "步骤名"}]\n}\n${FIXED_JSON_MARKER_END}`;
+const TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT = `请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "todos": [\n    {\n      "todo_summary": "待办摘要",\n      "task_description": "详细任务描述",\n      "priority": "high | medium | low",\n      "urgency_reason": "紧急性原因",\n      "start_recurring": false,\n      "confirm_by": null,\n      "executor": "user | system",\n      "tags": ["标签1", "标签2"],\n      "project": "项目名称",\n      "responsibility": "主要来源职责（字符串）",\n      "responsibilities": ["来源职责1", "来源职责2"]\n    }\n  ]\n}\n若没有可发掘待办，请返回 {"todos": []}。`;
 
-const TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "todos": [\n    {\n      "todo_summary": "待办摘要",\n      "task_description": "详细任务描述",\n      "priority": "high | medium | low",\n      "urgency_reason": "紧急性原因",\n      "start_recurring": false,\n      "confirm_by": null,\n      "executor": "user | system",\n      "tags": ["标签1", "标签2"],\n      "project": "项目名称"\n    }\n  ]\n}\n若没有可发掘待办，请返回 {"todos": []}。\n${FIXED_JSON_MARKER_END}`;
-
-const TODO_DEDUP_FIXED_JSON_OUTPUT_FORMAT = `${FIXED_JSON_MARKER_START}\n请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "duplicates": [\n    {\n      "source_id": "重复任务ID",\n      "target_id": "保留任务ID",\n      "reason": "判重理由"\n    }\n  ]\n}\n若没有重复任务，请返回 {"duplicates": []}。\n${FIXED_JSON_MARKER_END}`;
+const TODO_DEDUP_FIXED_JSON_OUTPUT_FORMAT = `请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "duplicates": [\n    {\n      "source_id": "重复任务ID",\n      "target_id": "保留任务ID",\n      "reason": "判重理由"\n    }\n  ]\n}\n若没有可发掘待办，请返回 {"duplicates": []}。`;
 
 const ORCHESTRATION_PROMPT_EXAMPLE = `分析以下待办任务，从可用的Agent、W-Agent和Workflow中选择最佳方案来完成任务。\n\n当前时间：\n{current_time}\n\n待办任务：\n{todo_desc}\n\n可用Agent：\n{agent_desc}\n\n可用W-Agent：\n{wagent_desc}\n\n可用Workflow：\n{workflow_desc}\n\n要求：\n1. 结合任务描述和候选 input_params 自动补全最合适的 input_params。\n2. 必须结合上方“当前时间”为任务生成 start_time 与 deadline。\n3. deadline 不能晚于任务中最早的 due_date；如没有 due_date，请结合当前时间与 estimated_duration_minutes 给出合理 deadline。\n4. 若选择 new_wagent，请给出 steps；否则 steps 可为空数组。\n5. recommended_name 必须与 recommended_id 对应。`;
 
@@ -108,15 +102,26 @@ const buildPromptTemplateWithFixedPart = (editablePrompt: string, fixedPart: str
   return body ? `${body}\n\n${fixedPart}` : fixedPart;
 };
 
+const stripLegacyFixedMarkers = (template: string) => template
+  .replace(/^# ==== FIXED_JSON_OUTPUT_FORMAT_START \(DO NOT EDIT\) ====\s*\n?/gm, '')
+  .replace(/^# ==== FIXED_JSON_OUTPUT_FORMAT_END ====\s*\n?/gm, '');
+
 const splitPromptTemplateWithFixedPart = (fullTemplate: string, fallbackFixedPart: string) => {
-  const raw = fullTemplate || '';
-  const startIdx = raw.indexOf(FIXED_JSON_MARKER_START);
-  const endIdx = raw.indexOf(FIXED_JSON_MARKER_END);
-  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
+  const raw = stripLegacyFixedMarkers(fullTemplate || '').trim();
+  const fixedBlockAnchor = '请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。';
+
+  const anchorIdx = raw.indexOf(fixedBlockAnchor);
+  if (anchorIdx !== -1) {
+    const editablePrompt = raw.slice(0, anchorIdx).trimEnd();
+    return { editablePrompt, fixedPart: fallbackFixedPart };
+  }
+
+  const fixedIdx = raw.indexOf(fallbackFixedPart);
+  if (fixedIdx === -1) {
     return { editablePrompt: raw, fixedPart: fallbackFixedPart };
   }
-  const editablePrompt = raw.slice(0, startIdx).trimEnd();
-  const fixedPart = raw.slice(startIdx, endIdx + FIXED_JSON_MARKER_END.length);
+  const editablePrompt = raw.slice(0, fixedIdx).trimEnd();
+  const fixedPart = fallbackFixedPart;
   return { editablePrompt, fixedPart };
 };
 
@@ -129,14 +134,10 @@ function LLMTab({
 }) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const [hasConfig, setHasConfig] = useState(false);
   // Add state for collapsibility and switches
   const [configExpanded, setConfigExpanded] = useState(true);
   const [useTemperature, setUseTemperature] = useState(true);
   const [useTopP, setUseTopP] = useState(true);
-
-  const [usage, setUsage] = useState<LLMUsageSummary | null>(null);
-  const [usageLoading, setUsageLoading] = useState(false);
   const enhancementConfig = PROMPT_TEMPLATE_ENHANCEMENT_CONFIG[purpose];
   const isPromptTemplateEnhanced = !!enhancementConfig;
   const [fixedPromptPart, setFixedPromptPart] = useState(
@@ -145,35 +146,9 @@ function LLMTab({
   // Add ref to track notification state
   const notifiedRef = useRef(false);
 
-  const formatTokenCount = (value?: number) =>
-    new Intl.NumberFormat('zh-CN').format(value ?? 0);
-
-  const formatCurrency = (value?: number) =>
-    `¥${(value ?? 0).toFixed(4)}`;
-
-  const loadUsage = useCallback(async () => {
-    setUsageLoading(true);
-    try {
-      const res = await getLLMUsage(purpose);
-      const body = (res as { data: unknown }).data;
-      const u = (body as { data?: Partial<LLMUsageSummary> })?.data ?? body;
-      const usageData = u as Partial<LLMUsageSummary> | undefined;
-      setUsage({
-        total_tokens_used: usageData?.total_tokens_used ?? 0,
-        total_cost: usageData?.total_cost ?? 0,
-        prompt_version: usageData?.prompt_version ?? 1,
-      });
-    } catch {
-      setUsage(null);
-    } finally {
-      setUsageLoading(false);
-    }
-  }, [purpose]);
-
   useEffect(() => {
       // Reset notification state when purpose changes
       notifiedRef.current = false;
-      setUsage(null);
   }, [purpose]);
 
   useEffect(() => {
@@ -184,18 +159,10 @@ function LLMTab({
         const config = raw as Record<string, unknown>;
         if (config && typeof config === 'object') {
           const isConfigured = !!(config.api_key && config.api_endpoint);
-          setHasConfig(isConfigured);
-
-          setConfigExpanded(!isConfigured);
 
           if (!isConfigured && !notifiedRef.current) {
               message.info('模型尚未配置，请填写相应内容');
               notifiedRef.current = true;
-          }
-          if (!isConfigured) {
-            setUsage(null);
-          } else {
-            loadUsage();
           }
           setUseTemperature((config.temperature_enabled as boolean | undefined) ?? true);
           setUseTopP((config.top_p_enabled as boolean | undefined) ?? true);
@@ -221,7 +188,7 @@ function LLMTab({
         }
       })
       .catch(() => message.error('加载失败'));
-  }, [purpose, form, loadUsage, isPromptTemplateEnhanced, enhancementConfig]);
+  }, [purpose, form, isPromptTemplateEnhanced, enhancementConfig]);
 
   const buildPromptTemplatePayload = (editablePrompt: unknown) => {
     const raw = String(editablePrompt ?? '');
@@ -247,11 +214,15 @@ function LLMTab({
       const obj = detail as {
         message?: string;
         missing_placeholders?: string[];
+        unknown_placeholders?: string[];
         field?: string;
       };
       if (obj.field === 'prompt_template') {
         if (Array.isArray(obj.missing_placeholders) && obj.missing_placeholders.length > 0) {
           return `缺少占位符: ${obj.missing_placeholders.join(', ')}`;
+        }
+        if (Array.isArray(obj.unknown_placeholders) && obj.unknown_placeholders.length > 0) {
+          return `存在未知占位符: ${obj.unknown_placeholders.join(', ')}`;
         }
         if (obj.message) {
           return obj.message;
@@ -286,9 +257,6 @@ function LLMTab({
       });
       form.setFields([{ name: 'prompt_template', errors: [] }]);
       message.success('保存成功');
-      setHasConfig(true);
-      setConfigExpanded(false); // Collapse on successful save
-      await loadUsage();
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: unknown } }; message?: string };
       const promptError = buildPromptFieldErrorMessage(err?.response?.data?.detail);
@@ -523,28 +491,6 @@ function LLMTab({
         </Card>
       </Form>
 
-      {hasConfig && (
-        <Card title="使用统计" style={{ marginTop: 16 }}>
-          <Button size="small" onClick={loadUsage} style={{ marginBottom: 12 }} loading={usageLoading}>
-            刷新统计
-          </Button>
-          {usage ? (
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="总 Token 使用量">
-                {formatTokenCount(usage.total_tokens_used)}
-              </Descriptions.Item>
-              <Descriptions.Item label="累计费用估算">
-                {formatCurrency(usage.total_cost)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Prompt 版本">
-                v{usage.prompt_version}
-              </Descriptions.Item>
-            </Descriptions>
-          ) : (
-            <Text type="secondary">暂无使用数据</Text>
-          )}
-        </Card>
-      )}
     </div>
   );
 }

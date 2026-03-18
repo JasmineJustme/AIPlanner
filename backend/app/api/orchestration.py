@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.engine.orchestrator import orchestrator
 from app.models import Todo, SchedulePlan, ScheduleTask, Agent, WAgent
+from app.services.schedule_rebalance import rebalance_schedule_tasks
 from app.services.sse_manager import sse_manager
 from loguru import logger
 
@@ -392,6 +393,9 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
             status="pending",
             priority=plan_data.get("priority") or "medium",
             scheduled_at=scheduled_at,
+            original_scheduled_at=scheduled_at,
+            current_scheduled_at=scheduled_at,
+            delay_count=0,
             input_params=plan_data.get("input_params") or {},
         )
         db.add(schedule_task)
@@ -402,6 +406,10 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
         schedule_task.status = "pending"
         schedule_task.priority = plan_data.get("priority") or schedule_task.priority or "medium"
         schedule_task.scheduled_at = scheduled_at
+        if schedule_task.original_scheduled_at is None:
+            schedule_task.original_scheduled_at = scheduled_at
+        schedule_task.current_scheduled_at = scheduled_at
+        schedule_task.delay_count = 0
         schedule_task.input_params = plan_data.get("input_params") or {}
         schedule_task.error_message = None
 
@@ -539,6 +547,10 @@ async def submit_orchestration(
     }
     _orchestration_store[orch_id] = entry
 
+    # Commit early to avoid holding SQLite write lock during potentially slow LLM calls.
+    # Without this, rapid consecutive submissions can fail with "database is locked".
+    await db.commit()
+
     event_status = entry["status"]
     try:
         plan_result = await orchestrator.orchestrate(db, payload.todo_ids)
@@ -653,6 +665,7 @@ async def confirm_orchestration(
     else:
         entry["plan"] = _apply_recurrence_to_plan(entry.get("plan"), _normalize_recurrence_payload(entry.get("plan") or {}))
     await ensure_schedule_for_orchestration(db, orch_id, entry)
+    await rebalance_schedule_tasks(db)
     await _sync_todo_recurrence_for_orchestration(db, entry)
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()
@@ -686,6 +699,7 @@ async def confirm_wagent(
     else:
         entry["plan"] = _apply_recurrence_to_plan(entry.get("plan"), _normalize_recurrence_payload(entry.get("plan") or {}))
     await ensure_schedule_for_orchestration(db, orch_id, entry)
+    await rebalance_schedule_tasks(db)
     await _sync_todo_recurrence_for_orchestration(db, entry)
     await sync_todos_for_orchestration(db, orch_id, entry)
     _save_store()

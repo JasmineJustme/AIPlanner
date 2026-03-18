@@ -1,4 +1,5 @@
 import time
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,27 @@ REQUIRED_PROMPT_PLACEHOLDERS_BY_PURPOSE = {
     ],
 }
 
+ALLOWED_PROMPT_PLACEHOLDERS_BY_PURPOSE = {
+    "orchestration": [
+        "{current_time}",
+        "{todo_desc}",
+        "{agent_desc}",
+        "{wagent_desc}",
+        "{workflow_desc}",
+    ],
+    "todo_analysis": [
+        "{current_time}",
+        "{datasource_info}",
+        "{responsibilities}",
+        # Backward-compatible optional placeholder used by some custom prompts.
+        "{todo_desc}",
+    ],
+    "todo_dedup": [
+        "{current_time}",
+        "{todo_desc}",
+    ],
+}
+
 
 def _serialize_llm_config(cfg: LLMConfig) -> LLMConfigResponse:
     data = LLMConfigResponse.model_validate(cfg).model_dump()
@@ -37,6 +59,10 @@ def _serialize_llm_config(cfg: LLMConfig) -> LLMConfigResponse:
     data["temperature_enabled"] = prefs.get("temperature_enabled", True)
     data["top_p_enabled"] = prefs.get("top_p_enabled", True)
     return LLMConfigResponse.model_validate(data)
+
+
+def _extract_template_placeholders(prompt_template: str) -> list[str]:
+    return list(dict.fromkeys(re.findall(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}", prompt_template or "")))
 
 
 def _validate_orchestration_prompt_template(purpose: str, prompt_template: str | None) -> None:
@@ -55,6 +81,26 @@ def _validate_orchestration_prompt_template(purpose: str, prompt_template: str |
                 "message": (
                     f"{purpose} prompt_template missing required placeholders: "
                     + ", ".join(missing)
+                ),
+            },
+        )
+
+    allowed = ALLOWED_PROMPT_PLACEHOLDERS_BY_PURPOSE.get(purpose)
+    if not allowed:
+        return
+    placeholders = _extract_template_placeholders(prompt_template)
+    unknown = [token for token in placeholders if token not in allowed]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "UNKNOWN_PLACEHOLDERS",
+                "field": "prompt_template",
+                "purpose": purpose,
+                "unknown_placeholders": unknown,
+                "message": (
+                    f"{purpose} prompt_template contains unknown placeholders: "
+                    + ", ".join(unknown)
                 ),
             },
         )

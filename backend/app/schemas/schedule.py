@@ -13,6 +13,9 @@ class ScheduleTaskResponse(BaseModel):
     status: str
     priority: str | None = None
     scheduled_at: datetime | None = None
+    original_scheduled_at: datetime | None = None
+    current_scheduled_at: datetime | None = None
+    delay_count: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
     input_params: dict[str, Any] = {}

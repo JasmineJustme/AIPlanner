@@ -6,6 +6,7 @@ import {
   Button,
   Space,
   Select,
+  Segmented,
   message,
   Popconfirm,
 } from 'antd';
@@ -60,7 +61,13 @@ const STATUS_OPTIONS = [
   { value: 'confirming', label: '待确认' },
 ];
 
-function GanttView({ tasks }: { tasks: Array<{ id: string; name: string; start: string; end: string; status: string }> }) {
+const GANTT_WINDOW_OPTIONS = [
+  { label: '7天', value: 7 },
+  { label: '14天', value: 14 },
+  { label: '30天', value: 30 },
+];
+
+function GanttView({ tasks, windowDays }: { tasks: Array<{ id: string; name: string; start?: string | null; end?: string | null; status: string }>; windowDays: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
 
@@ -88,6 +95,46 @@ function GanttView({ tasks }: { tasks: Array<{ id: string; name: string; start: 
       initialized.current = true;
     }
 
+    const dayMs = 24 * 60 * 60 * 1000;
+    const windowSpanMs = Math.max(windowDays - 1, 0) * dayMs;
+    const now = new Date();
+    let windowStart = now;
+    let windowEnd = new Date(now.getTime() + windowSpanMs);
+
+    const parsedRanges = tasks
+      .map((t) => {
+        const parsedStart = t.start ? new Date(t.start) : null;
+        const parsedEnd = t.end ? new Date(t.end) : null;
+        if (parsedStart && Number.isNaN(parsedStart.getTime())) return null;
+        if (parsedEnd && Number.isNaN(parsedEnd.getTime())) return null;
+        const start = parsedStart || parsedEnd;
+        const end = parsedEnd || parsedStart;
+        if (!start || !end) return null;
+        return { start, end };
+      })
+      .filter((item): item is { start: Date; end: Date } => !!item);
+
+    if (parsedRanges.length > 0) {
+      const latestTaskTime = new Date(Math.max(...parsedRanges.map((range) => range.end.getTime())));
+      windowEnd = latestTaskTime;
+      windowStart = new Date(windowEnd.getTime() - windowSpanMs);
+
+      const tasksInBackwardWindow = parsedRanges
+        .filter((range) => range.end >= windowStart && range.start <= windowEnd)
+        .sort((a, b) => a.start.getTime() - b.start.getTime());
+
+      if (tasksInBackwardWindow.length > 0) {
+        const firstTaskStart = tasksInBackwardWindow[0].start;
+        if (firstTaskStart.getTime() > windowStart.getTime()) {
+          windowStart = firstTaskStart;
+          windowEnd = new Date(windowStart.getTime() + windowSpanMs);
+        }
+      }
+    }
+
+    gantt.config.start_date = windowStart;
+    gantt.config.end_date = windowEnd;
+
     const ganttTasks = tasks.map((t) => {
       const start = t.start ? new Date(t.start) : new Date();
       const end = t.end ? new Date(t.end) : new Date(start.getTime() + 3600000);
@@ -97,13 +144,13 @@ function GanttView({ tasks }: { tasks: Array<{ id: string; name: string; start: 
         text: t.name,
         start_date: start,
         duration,
-        progress: t.status === 'completed' ? 100 : 0,
+        progress: t.status === 'completed' ? 1 : 0,
         status: t.status,
       };
     });
     gantt.clearAll();
     gantt.parse({ data: ganttTasks, links: [] });
-  }, [tasks]);
+  }, [tasks, windowDays]);
 
   return (
     <>
@@ -119,10 +166,11 @@ function GanttView({ tasks }: { tasks: Array<{ id: string; name: string; start: 
 export default function SchedulingPage() {
   const [tasks, setTasks] = useState<ScheduleTask[]>([]);
   const [plans, setPlans] = useState<SchedulePlan[]>([]);
-  const [ganttTasks, setGanttTasks] = useState<Array<{ id: string; name: string; start: string; end: string; status: string }>>([]);
+  const [ganttTasks, setGanttTasks] = useState<Array<{ id: string; name: string; start?: string | null; end?: string | null; status: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [planFilter, setPlanFilter] = useState<string>('');
+  const [ganttWindowDays, setGanttWindowDays] = useState<number>(7);
 
   const getTaskDisplayName = useCallback((task: Pick<ScheduleTask, 'task_title' | 'plan_name' | 'agent_name' | 'agent_id' | 'wagent_id' | 'id'>) => {
     return task.task_title
@@ -152,9 +200,9 @@ export default function SchedulingPage() {
     try {
       const params = planFilter ? { plan_id: planFilter } : undefined;
       const res = await getGanttData(params);
-      const body = res.data as APIResponse<{ tasks: Array<{ id: string; name: string; start: string; end: string; status: string }> }>;
+      const body = res.data as APIResponse<{ tasks: Array<{ id: string; name: string; start?: string | null; end?: string | null; status: string }> }>;
       const data = body?.data ?? (res.data as unknown);
-      const taskList = (data as { tasks?: Array<{ id: string; name: string; start: string; end: string; status: string }> })?.tasks ?? [];
+      const taskList = (data as { tasks?: Array<{ id: string; name: string; start?: string | null; end?: string | null; status: string }> })?.tasks ?? [];
       setGanttTasks(Array.isArray(taskList) ? taskList : []);
     } catch {
       setGanttTasks([]);
@@ -377,6 +425,11 @@ export default function SchedulingPage() {
             style={{ width: 160 }}
             options={[{ value: '', label: '全部计划' }, ...plans.map((p) => ({ value: p.id, label: p.name }))]}
           />
+          <Segmented
+            options={GANTT_WINDOW_OPTIONS}
+            value={ganttWindowDays}
+            onChange={(value) => setGanttWindowDays(Number(value))}
+          />
         </Space>
       </div>
 
@@ -394,7 +447,7 @@ export default function SchedulingPage() {
             label: '甘特图',
             children: (
               <div style={{ background: '#fff', padding: 16, borderRadius: 8 }}>
-                <GanttView tasks={ganttTasks} />
+                <GanttView tasks={ganttTasks} windowDays={ganttWindowDays} />
               </div>
             ),
           },

@@ -23,6 +23,9 @@ export interface ScheduleTask {
   status: string;
   priority: string;
   scheduled_at: string;
+  original_scheduled_at?: string;
+  current_scheduled_at?: string;
+  delay_count?: number;
   started_at?: string;
   completed_at?: string;
   input_params?: Record<string, unknown>;

@@ -153,12 +153,14 @@ class TodoDiscoveryEngine:
                 item,
                 [
                     "responsibilities",
+                    "responsibility",
                     "responsibility_titles",
                     "responsibility_sources",
                     "work_responsibilities",
                     "来源职责",
                     "工作职责",
                     "职责",
+                    "工作职责来源",
                 ],
             )
 
@@ -205,6 +207,19 @@ class TodoDiscoveryEngine:
         lines = self._flatten_responsibility_tree(by_parent)
         return "\n".join(lines) if lines else "- 无"
 
+    async def _build_existing_todo_text(self, db: AsyncSession) -> str:
+        result = await db.execute(select(Todo).where(Todo.status != "completed"))
+        todos = result.scalars().all()
+        if not todos:
+            return "- 无"
+        return "\n".join(
+            [
+                f"- id={t.id}; title={t.title}; description={t.description or ''}; priority={t.priority or 'medium'}; "
+                f"status={t.status or ''}; due_date={t.due_date.isoformat() if t.due_date else '无'}; project={t.project or ''}"
+                for t in todos
+            ]
+        )
+
     async def _run_todo_dedup(self, db: AsyncSession) -> list[dict]:
         cfg_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "todo_dedup"))
         llm_cfg = cfg_result.scalar_one_or_none()
@@ -234,7 +249,8 @@ class TodoDiscoveryEngine:
             "请识别以下待办中语义重复的任务。\n"
             "当前时间:\n{current_time}\n\n"
             "待办列表:\n{todo_desc}\n\n"
-            "仅返回 JSON：{\"duplicates\":[{\"source_id\":\"...\",\"target_id\":\"...\",\"reason\":\"...\"}]}"
+            "仅返回 JSON：{\"duplicates\":[{\"source_id\":\"...\",\"target_id\":\"...\",\"reason\":\"...\"}]}。"
+            "若没有可发掘待办，请返回 {\"duplicates\": []}。"
         )
         prompt = self._render_prompt_template(
             llm_cfg.prompt_template or default_prompt,
@@ -303,6 +319,7 @@ class TodoDiscoveryEngine:
             )
         datasource_text = "\n".join(ds_lines) if ds_lines else "- 无可用数据源"
         responsibility_text = await self._build_responsibility_text(db)
+        todo_desc = await self._build_existing_todo_text(db)
         responsibility_lookup = await self._build_responsibility_lookup(db)
 
         llm_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "todo_analysis"))
@@ -316,8 +333,9 @@ class TodoDiscoveryEngine:
             "当前时间:\n{current_time}\n\n"
             "数据源信息:\n{datasource_info}\n\n"
             "工作职责:\n{responsibilities}\n\n"
+            "现有待办:\n{todo_desc}\n\n"
             "仅返回 JSON，字段必须完整："
-            "{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibilities\":[]}]}"
+            "{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibility\":\"\",\"responsibilities\":[]}]}"
         )
         prompt = self._render_prompt_template(
             llm_cfg.prompt_template or default_prompt,
@@ -325,12 +343,13 @@ class TodoDiscoveryEngine:
                 "current_time": current_time,
                 "datasource_info": datasource_text,
                 "responsibilities": responsibility_text,
+                "todo_desc": todo_desc,
             },
         )
         if '"todos"' not in prompt:
             prompt = (
                 f"{prompt}\n\n"
-                "仅返回 JSON：{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibilities\":[]}]}"
+                "仅返回 JSON：{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibility\":\"\",\"responsibilities\":[]}]}"
             )
 
         logger.info("Todo analysis LLM prompt:\n{}", prompt)

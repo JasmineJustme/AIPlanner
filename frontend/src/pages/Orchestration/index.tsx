@@ -798,14 +798,27 @@ export default function OrchestrationPage() {
 
   const handleBatchConfirm = async () => {
     if (selectedIds.size === 0) return;
-    try {
-        const promises = Array.from(selectedIds).map(id => confirmOrchestration(id));
-        await Promise.all(promises);
-        message.success(`已批量确认 ${selectedIds.size} 个任务`);
-        loadPending(); // Refresh list will clear selection
-        handleConfirmedNavigate();
-    } catch {
-        message.error("批量确认失败，请重试");
+    const ids = Array.from(selectedIds);
+    let successCount = 0;
+    const failedIds: string[] = [];
+
+    for (const orchId of ids) {
+      try {
+        await confirmOrchestration(orchId);
+        successCount += 1;
+      } catch {
+        failedIds.push(orchId);
+      }
+    }
+
+    if (successCount > 0) {
+      message.success(`已确认 ${successCount} 个任务`);
+      await loadPending(); // Refresh list will clear selection
+      handleConfirmedNavigate();
+    }
+
+    if (failedIds.length > 0) {
+      message.error(`有 ${failedIds.length} 个任务确认失败，请重试`);
     }
   };
 

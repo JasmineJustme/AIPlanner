@@ -44,6 +44,9 @@ def _task_to_dict(
         "status": t.status,
         "priority": t.priority,
         "scheduled_at": t.scheduled_at.isoformat() if t.scheduled_at else None,
+        "original_scheduled_at": t.original_scheduled_at.isoformat() if t.original_scheduled_at else None,
+        "current_scheduled_at": t.current_scheduled_at.isoformat() if t.current_scheduled_at else None,
+        "delay_count": int(t.delay_count or 0),
         "started_at": t.started_at.isoformat() if t.started_at else None,
         "completed_at": t.completed_at.isoformat() if t.completed_at else None,
         "input_params": t.input_params,
@@ -84,7 +87,7 @@ async def list_schedule_tasks(
     plan_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(ScheduleTask).order_by(ScheduleTask.scheduled_at.desc())
+    q = select(ScheduleTask).order_by(ScheduleTask.current_scheduled_at.desc())
     if status:
         q = q.where(ScheduleTask.status == status)
     else:
@@ -217,7 +220,7 @@ async def get_gantt_data(
     plan_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(ScheduleTask).where(ScheduleTask.status != "cancelled").order_by(ScheduleTask.scheduled_at)
+    q = select(ScheduleTask).where(ScheduleTask.status != "cancelled").order_by(ScheduleTask.current_scheduled_at)
     if plan_id:
         q = q.where(ScheduleTask.plan_id == plan_id)
     result = await db.execute(q)
@@ -253,8 +256,8 @@ async def get_gantt_data(
     for t in items:
         resolved_agent_name = agents_map.get(t.agent_id or t.wagent_id or "")
         name = _resolve_task_title(t, todo_titles_by_orch, plan_name=plan_names.get(t.plan_id), agent_name=resolved_agent_name)
-        start = t.scheduled_at
-        end = t.completed_at or t.started_at or t.scheduled_at
+        start = t.current_scheduled_at or t.scheduled_at
+        end = t.completed_at or t.started_at or t.current_scheduled_at or t.scheduled_at
         if end == start and start:
             from datetime import timedelta
             end = start + timedelta(hours=1)
@@ -297,8 +300,13 @@ async def delay_task(
         raise HTTPException(status_code=404, detail="Task not found")
     minutes = int(payload.get("minutes", 30) or 30)
     now = _now_local_naive()
-    base_time = task.scheduled_at if task.scheduled_at and task.scheduled_at > now else now
-    task.scheduled_at = base_time + timedelta(minutes=minutes)
+    current_time = task.current_scheduled_at or task.scheduled_at
+    base_time = current_time if current_time and current_time > now else now
+    if task.original_scheduled_at is None:
+        task.original_scheduled_at = task.scheduled_at
+    task.current_scheduled_at = base_time + timedelta(minutes=minutes)
+    task.scheduled_at = task.current_scheduled_at
+    task.delay_count = int(task.delay_count or 0) + 1
     task.status = "pending"
     task.confirm_action = "delayed"
     task.confirm_deadline = None
@@ -309,7 +317,7 @@ async def delay_task(
         entry = get_orchestration_entry(task.orchestration_id)
         if entry:
             plan = entry.get("plan") or {}
-            plan["start_time"] = _normalize_plan_time_value(task.scheduled_at.isoformat())
+            plan["start_time"] = _normalize_plan_time_value(task.current_scheduled_at.isoformat())
             entry["plan"] = plan
             _save_store()
 
@@ -380,7 +388,12 @@ async def retry_task(
     task.error_message = None
     task.started_at = None
     task.completed_at = None
-    task.scheduled_at = _now_local_naive()
+    next_run_at = _now_local_naive()
+    if task.original_scheduled_at is None:
+        task.original_scheduled_at = task.scheduled_at
+    task.current_scheduled_at = next_run_at
+    task.scheduled_at = next_run_at
+    task.delay_count = int(task.delay_count or 0) + 1
     await db.flush()
     return {"code": 200, "message": "success", "data": {"status": "retrying"}}
 
