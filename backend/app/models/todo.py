@@ -17,6 +17,8 @@ class Todo(TimestampMixin, Base):
     source_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
     due_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     tags: Mapped[dict | None] = mapped_column(JSON, default=list)
+    responsibility_ids: Mapped[list[str] | None] = mapped_column(JSON, default=list)
+    responsibility_titles: Mapped[list[str] | None] = mapped_column(JSON, default=list)
     project: Mapped[str | None] = mapped_column(String(200), nullable=True)
     review_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

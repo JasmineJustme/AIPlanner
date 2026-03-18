@@ -12,6 +12,52 @@ from app.services.llm_client import llm_client
 
 
 class TodoDiscoveryEngine:
+    def _normalize_responsibility_titles(self, value: object) -> list[str]:
+        if isinstance(value, str):
+            candidates = re.split(r"[,，;；/、\n]+", value)
+        elif isinstance(value, list):
+            candidates = []
+            for item in value:
+                if isinstance(item, dict):
+                    title = item.get("title") or item.get("name") or item.get("职责")
+                    if title:
+                        candidates.append(str(title))
+                elif item is not None:
+                    candidates.append(str(item))
+        else:
+            return []
+
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for raw in candidates:
+            title = str(raw or "").strip()
+            if not title:
+                continue
+            key = title.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(title)
+        return normalized
+
+    async def _build_responsibility_lookup(self, db: AsyncSession) -> dict[str, str]:
+        result = await db.execute(select(Responsibility))
+        items = result.scalars().all()
+        lookup: dict[str, str] = {}
+        for item in items:
+            key = (item.title or "").strip().lower()
+            if key and key not in lookup:
+                lookup[key] = item.id
+        return lookup
+
+    def _resolve_responsibility_ids(self, titles: list[str], lookup: dict[str, str]) -> list[str]:
+        ids: list[str] = []
+        for title in titles:
+            matched = lookup.get(title.strip().lower())
+            if matched and matched not in ids:
+                ids.append(matched)
+        return ids
+
     def _render_prompt_template(self, template: str, values: dict[str, str]) -> str:
         rendered = template or ""
         for key, value in values.items():
@@ -103,6 +149,18 @@ class TodoDiscoveryEngine:
             confirm_time = self._pick_first(item, ["confirm_by", "confirm_time", "need_confirm_before", "确认时间", "需要用户确认时间", "due_date", "deadline"])
             execution_mode = self._pick_first(item, ["executor", "execution_mode", "执行方", "执行人"])
             recurring = self._pick_first(item, ["start_recurring", "is_recurring", "need_recurring", "是否开始循环", "是否需要开始循环"])
+            responsibilities = self._pick_first(
+                item,
+                [
+                    "responsibilities",
+                    "responsibility_titles",
+                    "responsibility_sources",
+                    "work_responsibilities",
+                    "来源职责",
+                    "工作职责",
+                    "职责",
+                ],
+            )
 
             raw_tags = item.get("tags")
             tags = raw_tags if isinstance(raw_tags, list) else []
@@ -116,6 +174,7 @@ class TodoDiscoveryEngine:
                     "priority": self._normalize_priority(item.get("priority") if isinstance(item.get("priority"), str) else None),
                     "due_date": self._parse_due_date(confirm_time),
                     "tags": tags,
+                    "responsibility_titles": self._normalize_responsibility_titles(responsibilities),
                     "project": str(item.get("project") or item.get("项目") or "").strip() or None,
                     "review_reason": str(urgency_reason or "").strip() or None,
                     "is_recurring": self._normalize_bool(recurring),
@@ -244,6 +303,7 @@ class TodoDiscoveryEngine:
             )
         datasource_text = "\n".join(ds_lines) if ds_lines else "- 无可用数据源"
         responsibility_text = await self._build_responsibility_text(db)
+        responsibility_lookup = await self._build_responsibility_lookup(db)
 
         llm_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "todo_analysis"))
         llm_cfg = llm_result.scalar_one_or_none()
@@ -257,7 +317,7 @@ class TodoDiscoveryEngine:
             "数据源信息:\n{datasource_info}\n\n"
             "工作职责:\n{responsibilities}\n\n"
             "仅返回 JSON，字段必须完整："
-            "{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\"}]}"
+            "{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibilities\":[]}]}"
         )
         prompt = self._render_prompt_template(
             llm_cfg.prompt_template or default_prompt,
@@ -270,7 +330,7 @@ class TodoDiscoveryEngine:
         if '"todos"' not in prompt:
             prompt = (
                 f"{prompt}\n\n"
-                "仅返回 JSON：{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\"}]}"
+                "仅返回 JSON：{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibilities\":[]}]}"
             )
 
         logger.info("Todo analysis LLM prompt:\n{}", prompt)
@@ -289,6 +349,8 @@ class TodoDiscoveryEngine:
 
         created_items: list[Todo] = []
         for item in discovered:
+            responsibility_titles = item.get("responsibility_titles") or []
+            responsibility_ids = self._resolve_responsibility_ids(responsibility_titles, responsibility_lookup)
             todo = Todo(
                 title=item["title"],
                 description=item.get("description"),
@@ -298,6 +360,8 @@ class TodoDiscoveryEngine:
                 execution_mode=item.get("execution_mode") or "system",
                 due_date=item.get("due_date"),
                 tags=item.get("tags") or [],
+                responsibility_ids=responsibility_ids,
+                responsibility_titles=responsibility_titles,
                 project=item.get("project"),
                 review_reason=item.get("review_reason"),
                 is_recurring=bool(item.get("is_recurring")),

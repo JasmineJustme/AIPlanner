@@ -9,6 +9,8 @@ export interface Todo {
   source_ref?: string;
   due_date?: string;
   tags: string[];
+  responsibility_ids: string[];
+  responsibility_titles: string[];
   project?: string;
   review_status?: string;
   review_reason?: string;

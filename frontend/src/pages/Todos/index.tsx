@@ -387,6 +387,7 @@ export default function TodosPage() {
     const executionMode = getExecutionMode(record);
     const modeConfig = TODO_EXECUTION_MODE_MAP[executionMode] || TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System];
     const duplicateTarget = record.duplicate_of ? data.items.find((item) => item.id === record.duplicate_of) : undefined;
+    const responsibilities = Array.isArray(record.responsibility_titles) ? record.responsibility_titles : [];
 
     return (
       <div style={{ margin: 0, padding: 12, backgroundColor: '#fafafa', borderRadius: 4 }}>
@@ -399,6 +400,9 @@ export default function TodosPage() {
           </Descriptions.Item>
           <Descriptions.Item label="执行方式">
             <Tag color={modeConfig.color}>{modeConfig.text}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="工作职责">
+            {responsibilities.length > 0 ? responsibilities.join('、') : '无'}
           </Descriptions.Item>
           <Descriptions.Item label={executionMode === TodoExecutionMode.User ? '执行提示' : '编排详情'}>
             {executionMode === TodoExecutionMode.User ? (

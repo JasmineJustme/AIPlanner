@@ -11,6 +11,8 @@ class TodoCreate(BaseModel):
     execution_mode: str = "system"
     due_date: datetime | None = None
     tags: list[str] = Field(default_factory=list)
+    responsibility_ids: list[str] = Field(default_factory=list)
+    responsibility_titles: list[str] = Field(default_factory=list)
     project: str | None = None
     is_recurring: bool = False
     recurrence_cron: str | None = None
@@ -25,6 +27,8 @@ class TodoUpdate(BaseModel):
     execution_mode: Optional[str] = None
     due_date: Optional[datetime] = None
     tags: Optional[list[str]] = None
+    responsibility_ids: Optional[list[str]] = None
+    responsibility_titles: Optional[list[str]] = None
     project: Optional[str] = None
     is_recurring: Optional[bool] = None
     recurrence_cron: Optional[str] = None
@@ -42,6 +46,8 @@ class TodoResponse(BaseModel):
     execution_mode: str = "system"
     due_date: datetime | None = None
     tags: list[str] = Field(default_factory=list)
+    responsibility_ids: list[str] = Field(default_factory=list)
+    responsibility_titles: list[str] = Field(default_factory=list)
     project: str | None = None
     status: str
     source_ref: str | None = None
