@@ -1,23 +1,38 @@
 from datetime import UTC, datetime
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Agent, NotificationChannel
-from app.schemas.notification_channel import NotificationChannelUpdate, NotificationChannelResponse
+from app.schemas.notification_channel import (
+    NotificationChannelCreate,
+    NotificationChannelResponse,
+    NotificationChannelUpdate,
+)
 
 router = APIRouter(prefix="/config/notifications", tags=["config-notifications"])
 
-CHANNEL_TYPES = ["email_workflow", "wechat_workflow", "in_app"]
 CHANNEL_TYPE_ALIASES = {
     "email": "email_workflow",
     "wechat": "wechat_workflow",
 }
+CHANNEL_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,19}$")
 
 
 def _normalize_channel_type(channel_type: str) -> str:
     return CHANNEL_TYPE_ALIASES.get(channel_type, channel_type)
+
+
+def _validate_channel_type(channel_type: str) -> str:
+    normalized = _normalize_channel_type(str(channel_type).strip())
+    if not CHANNEL_TYPE_PATTERN.fullmatch(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail="channel_type must be 2-20 chars, start with a letter, and only contain lowercase letters, numbers, or underscores",
+        )
+    return normalized
 
 
 def _normalize_params(raw: object) -> list[dict]:
@@ -140,6 +155,21 @@ def _serialize_channel(ch: NotificationChannel) -> NotificationChannelResponse:
     return NotificationChannelResponse.model_validate(payload)
 
 
+async def _get_channel_by_type(db: AsyncSession, channel_type: str) -> NotificationChannel | None:
+    normalized = _normalize_channel_type(channel_type)
+    result = await db.execute(
+        select(NotificationChannel).where(
+            NotificationChannel.channel_type.in_([normalized, channel_type])
+        )
+    )
+    rows = result.scalars().all()
+    if not rows:
+        return None
+
+    exact = next((row for row in rows if row.channel_type == normalized), None)
+    return exact or rows[0]
+
+
 @router.get("")
 async def list_notification_channels(
     db: AsyncSession = Depends(get_db),
@@ -156,32 +186,67 @@ async def list_notification_channels(
         else:
             canonical_existing.add(canonical)
 
-    for ct in CHANNEL_TYPES:
+    for ct, alias in alias_rows.items():
         if ct in canonical_existing:
             continue
-        alias = alias_rows.get(ct)
-        if alias:
-            alias.channel_type = ct
-            canonical_existing.add(ct)
-            continue
-        ch = NotificationChannel(
-            channel_type=ct,
-            name=ct,
-            dify_endpoint="",
-            dify_api_key="",
-            input_mapping={},
-        )
-        db.add(ch)
-        await db.flush()
-        items.append(ch)
+        alias.channel_type = ct
+        canonical_existing.add(ct)
 
     await db.flush()
+
+    deduped_by_type: dict[str, NotificationChannelResponse] = {}
+    for item in items:
+        serialized = _serialize_channel(item)
+        deduped_by_type[serialized.channel_type] = serialized
+
+    ordered = [deduped_by_type[key] for key in sorted(deduped_by_type.keys())]
 
     return {
         "code": 200,
         "message": "success",
-        "data": [_serialize_channel(i) for i in items if _normalize_channel_type(i.channel_type) in CHANNEL_TYPES],
+        "data": ordered,
     }
+
+
+@router.post("")
+async def create_channel(
+    payload: NotificationChannelCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    channel_type = _validate_channel_type(payload.channel_type)
+
+    existing = await _get_channel_by_type(db, channel_type)
+    if existing:
+        raise HTTPException(status_code=400, detail=f"提醒渠道类型 '{channel_type}' 已存在")
+
+    data = payload.model_dump(exclude_unset=True)
+    input_params = _normalize_params(data.pop("input_params", None)) if "input_params" in data else None
+    message_field_specified = "message_field" in data
+    message_field_raw = data.pop("message_field", None) if message_field_specified else None
+    message_field = str(message_field_raw).strip() if message_field_raw else None
+    agent_id = data.pop("agent_id", None)
+
+    ch = NotificationChannel(
+        channel_type=channel_type,
+        name=str(data.get("name") or channel_type),
+        dify_endpoint="",
+        dify_api_key="",
+        input_mapping={},
+        is_enabled=bool(data.get("is_enabled", True)),
+    )
+    db.add(ch)
+    await db.flush()
+
+    if agent_id:
+        await _apply_agent_binding(db, ch, str(agent_id), input_params)
+    elif input_params is not None:
+        ch.input_mapping = {"input_params": input_params}
+
+    _validate_or_cleanup_message_field(ch, message_field, message_field_specified)
+
+    await db.flush()
+    await db.refresh(ch)
+    return {"code": 200, "message": "success", "data": _serialize_channel(ch)}
 
 
 @router.put("/{channel_type}")
@@ -190,11 +255,8 @@ async def update_channel(
     payload: NotificationChannelUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    channel_type = _normalize_channel_type(channel_type)
-    result = await db.execute(
-        select(NotificationChannel).where(NotificationChannel.channel_type == channel_type)
-    )
-    ch = result.scalar_one_or_none()
+    channel_type = _validate_channel_type(channel_type)
+    ch = await _get_channel_by_type(db, channel_type)
     if not ch:
         ch = NotificationChannel(
             channel_type=channel_type,
@@ -235,11 +297,8 @@ async def toggle_channel(
     channel_type: str,
     db: AsyncSession = Depends(get_db),
 ):
-    channel_type = _normalize_channel_type(channel_type)
-    result = await db.execute(
-        select(NotificationChannel).where(NotificationChannel.channel_type == channel_type)
-    )
-    ch = result.scalar_one_or_none()
+    channel_type = _validate_channel_type(channel_type)
+    ch = await _get_channel_by_type(db, channel_type)
     if not ch:
         raise HTTPException(status_code=404, detail="Channel not found")
     ch.is_enabled = not ch.is_enabled
@@ -253,11 +312,26 @@ async def test_channel(
     channel_type: str,
     db: AsyncSession = Depends(get_db),
 ):
-    channel_type = _normalize_channel_type(channel_type)
-    result = await db.execute(
-        select(NotificationChannel).where(NotificationChannel.channel_type == channel_type)
-    )
-    ch = result.scalar_one_or_none()
+    channel_type = _validate_channel_type(channel_type)
+    ch = await _get_channel_by_type(db, channel_type)
     if not ch:
         raise HTTPException(status_code=404, detail="Channel not found")
     return {"code": 200, "message": "success", "data": {"connected": True, "latency_ms": 42}}
+
+
+@router.delete("/{channel_type}")
+async def delete_channel(
+    channel_type: str,
+    db: AsyncSession = Depends(get_db),
+):
+    channel_type = _validate_channel_type(channel_type)
+
+    ch = await _get_channel_by_type(db, channel_type)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    await db.delete(ch)
+    await db.flush()
+    return {"code": 200, "message": "success", "data": None}
+
+

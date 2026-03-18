@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -11,6 +11,7 @@ class NotificationPref(TimestampMixin, Base):
     in_app_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     email_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     wechat_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    channel_enabled_map: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class NotificationGlobalPref(TimestampMixin, Base):

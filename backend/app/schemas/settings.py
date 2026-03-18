@@ -8,9 +8,10 @@ class SystemSettingsUpdate(BaseModel):
 
 class NotificationPrefUpdate(BaseModel):
     message_type: str
-    in_app_enabled: bool
-    email_enabled: bool
-    wechat_enabled: bool
+    in_app_enabled: Optional[bool] = None
+    email_enabled: Optional[bool] = None
+    wechat_enabled: Optional[bool] = None
+    channel_enabled_map: Optional[dict[str, bool]] = None
 
 
 class NotificationGlobalPrefUpdate(BaseModel):

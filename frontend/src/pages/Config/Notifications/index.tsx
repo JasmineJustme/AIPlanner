@@ -8,11 +8,15 @@ import {
   Switch,
   Button,
   Select,
+  Modal,
+  Popconfirm,
   message,
   Typography,
   Tag,
 } from 'antd';
 import {
+  createNotificationChannel,
+  deleteNotificationChannel,
   getNotificationChannels,
   updateNotificationChannel,
   toggleNotificationChannel,
@@ -23,10 +27,7 @@ import type { ParamDefinition } from '@/components/ParamTable';
 
 const { Title, Text } = Typography;
 
-const CHANNELS = [
-  { key: 'email_workflow', name: '邮件工作流' },
-  { key: 'wechat_workflow', name: '微信工作流' },
-] as const;
+const CHANNEL_TYPE_PATTERN = /^[a-z][a-z0-9_]{1,19}$/;
 
 const normalizeParams = (arr?: ParamDefinition[]): ParamDefinition[] => {
   if (!Array.isArray(arr)) return [];
@@ -83,6 +84,7 @@ function NotificationCard({
   onUpdate,
   onToggle,
   onTest,
+  onDelete,
 }: {
   channelKey: string;
   label: string;
@@ -96,6 +98,7 @@ function NotificationCard({
   ) => Promise<void>;
   onToggle: (channelKey: string) => Promise<void>;
   onTest: (channelKey: string) => Promise<void>;
+  onDelete: (channelKey: string) => Promise<void>;
 }) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -130,7 +133,6 @@ function NotificationCard({
     }, {});
 
     form.setFieldsValue({
-      name: config.name ?? label,
       agent_id: inferredAgentId,
       input_param_values: prefill,
       message_field: config.message_field,
@@ -164,9 +166,6 @@ function NotificationCard({
         <Text type="secondary" style={{ marginLeft: 8 }}>渠道类型: {channelKey}</Text>
       </div>
       <Form form={form} layout="vertical" onFinish={handleFinish}>
-        <Form.Item name="name" label="名称">
-          <Input placeholder="渠道名称" />
-        </Form.Item>
         <Form.Item
           name="agent_id"
           label="绑定 Agent"
@@ -210,6 +209,16 @@ function NotificationCard({
         <Form.Item style={{ marginTop: 12 }}>
           <Button type="primary" htmlType="submit" loading={loading}>保存</Button>
           <Button style={{ marginLeft: 8 }} onClick={() => onTest(channelKey)}>测试</Button>
+          <Popconfirm
+            title="删除提醒渠道"
+            description="删除后不可恢复，是否继续？"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => onDelete(channelKey)}
+          >
+            <Button danger style={{ marginLeft: 8 }}>删除</Button>
+          </Popconfirm>
         </Form.Item>
       </Form>
     </Card>
@@ -217,8 +226,11 @@ function NotificationCard({
 }
 
 export default function ConfigNotificationsPage() {
-  const [channels, setChannels] = useState<Record<string, ChannelConfig>>({});
+  const [channels, setChannels] = useState<ChannelConfig[]>([]);
   const [agents, setAgents] = useState<AgentItem[]>([]);
+  const [createVisible, setCreateVisible] = useState(false);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createForm] = Form.useForm();
 
   const loadAgents = async () => {
     try {
@@ -238,15 +250,9 @@ export default function ConfigNotificationsPage() {
       const body = (res as { data: unknown }).data;
       const payload = (body as { data?: ChannelConfig[] })?.data ?? body;
       const rows = Array.isArray(payload) ? payload : [];
-      const byType = rows.reduce<Record<string, ChannelConfig>>((acc, item) => {
-        if (item?.channel_type) {
-          acc[item.channel_type] = item;
-        }
-        return acc;
-      }, {});
-      setChannels(byType);
+      setChannels(rows);
     } catch {
-      setChannels({});
+      setChannels([]);
     }
   };
 
@@ -275,7 +281,6 @@ export default function ConfigNotificationsPage() {
     }));
 
     await updateNotificationChannel(channelKey, {
-      name: channels[channelKey]?.name ?? CHANNELS.find((item) => item.key === channelKey)?.name ?? channelKey,
       agent_id: selectedAgent.id,
       input_params: mergedInputParams,
       message_field: messageField ?? null,
@@ -303,26 +308,100 @@ export default function ConfigNotificationsPage() {
     }
   };
 
+  const handleCreate = async () => {
+    try {
+      const values = await createForm.validateFields();
+      setCreateLoading(true);
+      await createNotificationChannel({
+        channel_type: String(values.channel_type ?? '').trim(),
+      });
+      message.success('提醒渠道已创建');
+      setCreateVisible(false);
+      createForm.resetFields();
+      await loadChannels();
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
+      }
+      message.error('创建失败');
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  const handleDelete = async (channelKey: string) => {
+    try {
+      await deleteNotificationChannel(channelKey);
+      message.success('提醒渠道已删除');
+      await loadChannels();
+    } catch {
+      message.error('删除失败');
+    }
+  };
+
   return (
     <div>
-      <Title level={3} style={{ marginBottom: 16 }}>
-        提醒渠道配置
-      </Title>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Title level={3} style={{ margin: 0 }}>
+          提醒渠道配置
+        </Title>
+        <Button type="primary" onClick={() => setCreateVisible(true)}>新增提醒渠道</Button>
+      </div>
       <Row gutter={[16, 16]}>
-        {CHANNELS.map(({ key, name }) => (
-          <Col xs={24} md={12} key={key}>
+        {channels.map((channel) => (
+          <Col xs={24} md={12} key={channel.id}>
             <NotificationCard
-              channelKey={key}
-              label={name}
-              config={channels[key] ?? ({ channel_type: key, id: key, name } as ChannelConfig)}
+              channelKey={channel.channel_type}
+              label={channel.name ?? channel.channel_type}
+              config={channel}
               agents={agents}
               onUpdate={handleUpdate}
               onToggle={handleToggle}
               onTest={handleTest}
+              onDelete={handleDelete}
             />
           </Col>
         ))}
       </Row>
+      <Modal
+        title="新增提醒渠道"
+        open={createVisible}
+        onCancel={() => {
+          setCreateVisible(false);
+          createForm.resetFields();
+        }}
+        onOk={handleCreate}
+        confirmLoading={createLoading}
+        destroyOnClose
+      >
+        <Form
+          form={createForm}
+          layout="vertical"
+          initialValues={{
+            channel_type: '',
+          }}
+        >
+          <Form.Item
+            name="channel_type"
+            label="渠道标识"
+            extra="仅支持小写字母、数字和下划线，长度 2-20，例如 sms_workflow"
+            rules={[
+              { required: true, message: '请输入渠道标识' },
+              {
+                validator: (_, value: string) => {
+                  const normalized = String(value ?? '').trim();
+                  if (!normalized || CHANNEL_TYPE_PATTERN.test(normalized)) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error('格式不正确，请使用小写字母、数字和下划线，且以字母开头'));
+                },
+              },
+            ]}
+          >
+            <Input placeholder="sms_workflow" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

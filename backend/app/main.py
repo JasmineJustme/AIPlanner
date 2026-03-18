@@ -36,6 +36,27 @@ async def _ensure_sqlite_runtime_schema() -> None:
         if alter_sql:
             logger.warning(f"Applied SQLite compatibility schema updates for todos: {len(alter_sql)} column(s)")
 
+        pref_info = await conn.execute(text("PRAGMA table_info(notification_prefs)"))
+        pref_columns = {row[1] for row in pref_info.fetchall()}
+        if "channel_enabled_map" not in pref_columns:
+            await conn.execute(
+                text("ALTER TABLE notification_prefs ADD COLUMN channel_enabled_map JSON NOT NULL DEFAULT '{}'"),
+            )
+            await conn.execute(
+                text(
+                    """
+                    UPDATE notification_prefs
+                    SET channel_enabled_map =
+                        '{"in_app":' || CASE WHEN in_app_enabled THEN 'true' ELSE 'false' END ||
+                        ',"email_workflow":' || CASE WHEN email_enabled THEN 'true' ELSE 'false' END ||
+                        ',"wechat_workflow":' || CASE WHEN wechat_enabled THEN 'true' ELSE 'false' END ||
+                        '}'
+                    WHERE channel_enabled_map IS NULL OR channel_enabled_map = '{}'
+                    """
+                ),
+            )
+            logger.warning("Applied SQLite compatibility schema update for notification_prefs.channel_enabled_map")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

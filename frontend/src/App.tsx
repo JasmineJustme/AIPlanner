@@ -16,11 +16,6 @@ const HistoryPage = lazy(() => import('@/pages/History'));
 const HistoryAnalyticsPage = lazy(() => import('@/pages/History/Analytics'));
 const ConfigAgentsPage = lazy(() => import('@/pages/Config/Agents'));
 const ConfigAgentsDetailPage = lazy(() => import('@/pages/Config/Agents/Detail'));
-const ConfigWorkflowsPage = lazy(() => import('@/pages/Config/Workflows'));
-const ConfigWorkflowsDetailPage = lazy(() => import('@/pages/Config/Workflows/Detail'));
-const ConfigWAgentsPage = lazy(() => import('@/pages/Config/WAgents'));
-const ConfigWAgentsEditorPage = lazy(() => import('@/pages/Config/WAgents/Editor'));
-const ConfigWAgentsVersionsPage = lazy(() => import('@/pages/Config/WAgents/Versions'));
 const ConfigDataSourcesPage = lazy(() => import('@/pages/Config/DataSources'));
 const ConfigLLMPage = lazy(() => import('@/pages/Config/LLM'));
 const ConfigNotificationsPage = lazy(() => import('@/pages/Config/Notifications'));
@@ -62,13 +57,8 @@ export default function App() {
               <Route path="/config/agents" element={<ConfigAgentsPage />} />
               <Route path="/config/agents/new" element={<ConfigAgentsDetailPage />} />
               <Route path="/config/agents/:id" element={<ConfigAgentsDetailPage />} />
-              <Route path="/config/workflows" element={<ConfigWorkflowsPage />} />
-              <Route path="/config/workflows/new" element={<ConfigWorkflowsDetailPage />} />
-              <Route path="/config/workflows/:id" element={<ConfigWorkflowsDetailPage />} />
-              <Route path="/config/wagents" element={<ConfigWAgentsPage />} />
-              <Route path="/config/wagents/new" element={<ConfigWAgentsEditorPage />} />
-              <Route path="/config/wagents/:id" element={<ConfigWAgentsEditorPage />} />
-              <Route path="/config/wagents/:id/versions" element={<ConfigWAgentsVersionsPage />} />
+              <Route path="/config/workflows/*" element={<Navigate to="/config/agents" replace />} />
+              <Route path="/config/wagents/*" element={<Navigate to="/config/agents" replace />} />
               <Route path="/config/datasources" element={<ConfigDataSourcesPage />} />
               <Route path="/config/llm" element={<ConfigLLMPage />} />
               <Route path="/config/notifications" element={<ConfigNotificationsPage />} />

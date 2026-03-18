@@ -20,8 +20,9 @@ import {
   getNotificationGlobal,
   updateNotificationGlobal,
 } from '@/api/settings';
+import { getNotificationChannels } from '@/api/config';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 const MESSAGE_TYPES = [
   { key: 'review_new', label: '新待审' },
@@ -44,6 +45,16 @@ interface NotificationPrefRow {
   in_app_enabled: boolean;
   email_enabled: boolean;
   wechat_enabled: boolean;
+  channel_enabled_map?: Record<string, boolean>;
+}
+
+interface ChannelConfig {
+  channel_type: string;
+  name?: string;
+  agent_id?: string;
+  dify_endpoint?: string;
+  dify_api_key?: string;
+  is_enabled?: boolean;
 }
 
 interface GlobalPref {
@@ -56,29 +67,60 @@ interface GlobalPref {
 
 export default function SettingsNotificationPrefsPage() {
   const [prefs, setPrefs] = useState<Record<string, NotificationPrefRow>>({});
+  const [visibleChannels, setVisibleChannels] = useState<Array<{ key: string; label: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [globalForm] = Form.useForm();
 
+  const isConfiguredChannel = (channel: ChannelConfig) => {
+    if (channel.agent_id) {
+      return true;
+    }
+    return Boolean((channel.dify_endpoint ?? '').trim() && (channel.dify_api_key ?? '').trim());
+  };
+
+  const resolvePrefMap = (row?: NotificationPrefRow): Record<string, boolean> => {
+    const map = { ...(row?.channel_enabled_map ?? {}) };
+    map.in_app = map.in_app ?? row?.in_app_enabled ?? true;
+    map.email_workflow = map.email_workflow ?? row?.email_enabled ?? false;
+    map.wechat_workflow = map.wechat_workflow ?? row?.wechat_enabled ?? false;
+    return map;
+  };
+
   const loadPrefs = async () => {
     setLoading(true);
     try {
-      const [prefsRes, globalRes] = await Promise.all([
+      const [prefsRes, globalRes, channelRes] = await Promise.all([
         getNotificationPrefs(),
         getNotificationGlobal(),
+        getNotificationChannels(),
       ]);
       const prefsData = (prefsRes as { data: { data?: NotificationPrefRow[] } }).data?.data ?? [];
       const globalData = ((globalRes as { data: { data?: Partial<GlobalPref> } }).data?.data ?? {}) as Partial<GlobalPref>;
+      const channelData = (channelRes as { data: { data?: ChannelConfig[] } }).data?.data ?? [];
+
+      const nextVisibleChannels = (Array.isArray(channelData) ? channelData : [])
+        .filter((item) => item?.channel_type !== 'in_app')
+        .filter((item) => item?.is_enabled !== false)
+        .filter((item) => isConfiguredChannel(item))
+        .map((item) => ({
+          key: item.channel_type,
+          label: item.name || item.channel_type,
+        }));
+      setVisibleChannels(nextVisibleChannels);
 
       const prefsMap: Record<string, NotificationPrefRow> = {};
       MESSAGE_TYPES.forEach(({ key }) => {
         const p = (prefsData as NotificationPrefRow[]).find((x) => x.message_type === key);
+        const channelEnabledMap = resolvePrefMap(p);
         prefsMap[key] = p ?? {
           message_type: key,
           in_app_enabled: true,
           email_enabled: false,
           wechat_enabled: false,
+          channel_enabled_map: channelEnabledMap,
         };
+        prefsMap[key].channel_enabled_map = channelEnabledMap;
       });
       setPrefs(prefsMap);
 
@@ -102,10 +144,28 @@ export default function SettingsNotificationPrefsPage() {
 
   const handlePrefChange = async (
     messageType: string,
-    field: keyof NotificationPrefRow,
+    channelType: string,
     value: boolean
   ) => {
-    const next = { ...prefs[messageType], [field]: value };
+    const current = prefs[messageType] ?? {
+      message_type: messageType,
+      in_app_enabled: true,
+      email_enabled: false,
+      wechat_enabled: false,
+      channel_enabled_map: {},
+    };
+    const channelEnabledMap = {
+      ...resolvePrefMap(current),
+      [channelType]: value,
+    };
+    const next = {
+      ...current,
+      channel_enabled_map: channelEnabledMap,
+      in_app_enabled: channelEnabledMap.in_app ?? true,
+      email_enabled: channelEnabledMap.email_workflow ?? false,
+      wechat_enabled: channelEnabledMap.wechat_workflow ?? false,
+    };
+    const previous = prefs[messageType];
     setPrefs((p) => ({ ...p, [messageType]: next }));
     try {
       await updateNotificationPref({
@@ -113,10 +173,11 @@ export default function SettingsNotificationPrefsPage() {
         in_app_enabled: next.in_app_enabled,
         email_enabled: next.email_enabled,
         wechat_enabled: next.wechat_enabled,
+        channel_enabled_map: channelEnabledMap,
       });
       message.success('已更新');
     } catch {
-      setPrefs((p) => ({ ...p, [messageType]: prefs[messageType] }));
+      setPrefs((p) => ({ ...p, [messageType]: previous }));
       message.error('更新失败');
     }
   };
@@ -126,12 +187,17 @@ export default function SettingsNotificationPrefsPage() {
     try {
       await Promise.all(
         MESSAGE_TYPES.map(({ key }) =>
-          updateNotificationPref({
-            message_type: key,
-            in_app_enabled: prefs[key]?.in_app_enabled ?? true,
-            email_enabled: prefs[key]?.email_enabled ?? false,
-            wechat_enabled: prefs[key]?.wechat_enabled ?? false,
-          })
+          (() => {
+            const row = prefs[key];
+            const channelEnabledMap = resolvePrefMap(row);
+            return updateNotificationPref({
+              message_type: key,
+              in_app_enabled: channelEnabledMap.in_app ?? true,
+              email_enabled: channelEnabledMap.email_workflow ?? false,
+              wechat_enabled: channelEnabledMap.wechat_workflow ?? false,
+              channel_enabled_map: channelEnabledMap,
+            });
+          })()
         )
       );
       const values = await globalForm.validateFields();
@@ -152,6 +218,22 @@ export default function SettingsNotificationPrefsPage() {
     }
   };
 
+  const channelColumns: ColumnsType<NotificationPrefRow & { label: string }> = visibleChannels.map((channel) => ({
+    title: channel.label,
+    dataIndex: channel.key,
+    key: channel.key,
+    width: 140,
+    render: (_, record) => {
+      const channelEnabledMap = resolvePrefMap(record);
+      return (
+        <Switch
+          checked={Boolean(channelEnabledMap[channel.key])}
+          onChange={(v) => handlePrefChange(record.message_type, channel.key, v)}
+        />
+      );
+    },
+  }));
+
   const columns: ColumnsType<NotificationPrefRow & { label: string }> = [
     {
       title: '消息类型',
@@ -159,42 +241,7 @@ export default function SettingsNotificationPrefsPage() {
       key: 'label',
       width: 140,
     },
-    {
-      title: '站内通知',
-      dataIndex: 'in_app_enabled',
-      key: 'in_app_enabled',
-      width: 120,
-      render: (_, record) => (
-        <Switch
-          checked={record.in_app_enabled}
-          onChange={(v) => handlePrefChange(record.message_type, 'in_app_enabled', v)}
-        />
-      ),
-    },
-    {
-      title: '邮件推送',
-      dataIndex: 'email_enabled',
-      key: 'email_enabled',
-      width: 120,
-      render: (_, record) => (
-        <Switch
-          checked={record.email_enabled}
-          onChange={(v) => handlePrefChange(record.message_type, 'email_enabled', v)}
-        />
-      ),
-    },
-    {
-      title: '企微推送',
-      dataIndex: 'wechat_enabled',
-      key: 'wechat_enabled',
-      width: 120,
-      render: (_, record) => (
-        <Switch
-          checked={record.wechat_enabled}
-          onChange={(v) => handlePrefChange(record.message_type, 'wechat_enabled', v)}
-        />
-      ),
-    },
+    ...channelColumns,
   ];
 
   const tableData = MESSAGE_TYPES.map(({ key, label }) => ({
@@ -204,7 +251,10 @@ export default function SettingsNotificationPrefsPage() {
     in_app_enabled: prefs[key]?.in_app_enabled ?? true,
     email_enabled: prefs[key]?.email_enabled ?? false,
     wechat_enabled: prefs[key]?.wechat_enabled ?? false,
+    channel_enabled_map: resolvePrefMap(prefs[key]),
   }));
+
+  const hasEditableChannels = visibleChannels.length > 0;
 
   return (
     <div>
@@ -213,13 +263,17 @@ export default function SettingsNotificationPrefsPage() {
       </Title>
 
       <Card title="按消息类型" style={{ marginBottom: 24 }}>
-        <Table
-          rowKey="message_type"
-          loading={loading}
-          columns={columns}
-          dataSource={tableData}
-          pagination={false}
-        />
+        {hasEditableChannels ? (
+          <Table
+            rowKey="message_type"
+            loading={loading}
+            columns={columns}
+            dataSource={tableData}
+            pagination={false}
+          />
+        ) : (
+          <Text type="secondary">当前无可用提醒渠道</Text>
+        )}
       </Card>
 
       <Card title="全局设置" style={{ marginBottom: 24 }}>

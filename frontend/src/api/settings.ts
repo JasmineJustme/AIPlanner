@@ -13,6 +13,7 @@ export const updateNotificationPref = (data: {
   in_app_enabled?: boolean;
   email_enabled?: boolean;
   wechat_enabled?: boolean;
+  channel_enabled_map?: Record<string, boolean>;
 }) => client.put('/settings/notification-prefs', data);
 
 export const getNotificationGlobal = () =>

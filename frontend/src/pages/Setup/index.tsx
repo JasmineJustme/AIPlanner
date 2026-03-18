@@ -37,7 +37,7 @@ const STEPS = [
   { title: '欢迎' },
   { title: '数据源配置' },
   { title: 'LLM 配置' },
-  { title: 'Agent/Workflow' },
+  { title: 'Agent 配置' },
   { title: '完成' },
 ];
 
@@ -196,12 +196,10 @@ export default function SetupPage() {
       )}
 
       {current === 3 && (
-        <Card title="Agent/Workflow">
-          <Paragraph>请在配置中心添加至少一个 Agent 或 Workflow。</Paragraph>
+        <Card title="Agent 配置">
+          <Paragraph>请在配置中心添加至少一个 Agent。</Paragraph>
           <Paragraph>
             <Link to={ROUTES.CONFIG_AGENTS}>Agent 配置</Link>
-            {' · '}
-            <Link to={ROUTES.CONFIG_WORKFLOWS}>Workflow 配置</Link>
           </Paragraph>
           <Button type="primary" onClick={handleNext}>
             下一步

@@ -82,6 +82,8 @@ export const getLLMUsage = (purpose: string) =>
 // Notification channels
 export const getNotificationChannels = () =>
   client.get('/config/notifications');
+export const createNotificationChannel = (data: Record<string, unknown>) =>
+  client.post('/config/notifications', data);
 export const updateNotificationChannel = (
   channelType: string,
   data: Record<string, unknown>
@@ -90,6 +92,8 @@ export const toggleNotificationChannel = (channelType: string) =>
   client.patch(`/config/notifications/${channelType}/toggle`);
 export const testNotificationChannel = (channelType: string) =>
   client.post(`/config/notifications/${channelType}/test`);
+export const deleteNotificationChannel = (channelType: string) =>
+  client.delete(`/config/notifications/${channelType}`);
 
 // Responsibilities
 export const getResponsibilities = () => client.get('/config/responsibilities');

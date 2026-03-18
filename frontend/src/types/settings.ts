@@ -10,6 +10,7 @@ export interface NotificationPref {
   in_app_enabled: boolean;
   email_enabled: boolean;
   wechat_enabled: boolean;
+  channel_enabled_map?: Record<string, boolean>;
 }
 
 export interface NotificationGlobalPref {

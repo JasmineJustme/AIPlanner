@@ -29,8 +29,6 @@ interface SearchData {
 const CATEGORY_LABELS: Record<string, string> = {
   todos: '待办',
   agents: 'Agent',
-  workflows: 'Workflow',
-  wagents: 'W-Agent',
   tasks: '调度',
   messages: '消息',
 };
@@ -38,8 +36,6 @@ const CATEGORY_LABELS: Record<string, string> = {
 const CATEGORY_ROUTES: Record<string, (id: string) => string> = {
   todos: () => ROUTES.TODOS,
   agents: (id) => `/config/agents/${id}`,
-  workflows: (id) => `/config/workflows/${id}`,
-  wagents: (id) => `/config/wagents/${id}`,
   tasks: () => ROUTES.SCHEDULING,
   messages: () => ROUTES.MESSAGES,
 };

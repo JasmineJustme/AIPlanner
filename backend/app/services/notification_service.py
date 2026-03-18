@@ -10,6 +10,23 @@ from datetime import UTC, datetime
 
 
 class NotificationService:
+    def _resolve_enabled_channels(self, pref: NotificationPref) -> list[str]:
+        raw_map = pref.channel_enabled_map if isinstance(pref.channel_enabled_map, dict) else {}
+        enabled = [
+            str(channel_type).strip()
+            for channel_type, is_enabled in raw_map.items()
+            if str(channel_type).strip() and bool(is_enabled)
+        ]
+
+        if not enabled:
+            if pref.email_enabled:
+                enabled.append("email_workflow")
+            if pref.wechat_enabled:
+                enabled.append("wechat_workflow")
+
+        # External push excludes in-app channel because SSE already handles in-app delivery.
+        return [item for item in enabled if item != "in_app"]
+
     async def notify(
         self,
         db: AsyncSession,
@@ -61,11 +78,11 @@ class NotificationService:
                 return msg
 
         if pref:
-            if pref.email_enabled:
-                await self._push_external(db, "email_workflow", title, content)
-                msg.external_pushed = True
-            if pref.wechat_enabled:
-                await self._push_external(db, "wechat_workflow", title, content)
+            pushed = False
+            for channel_type in self._resolve_enabled_channels(pref):
+                await self._push_external(db, channel_type, title, content)
+                pushed = True
+            if pushed:
                 msg.external_pushed = True
 
         await db.flush()

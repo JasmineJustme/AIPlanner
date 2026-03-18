@@ -5,6 +5,15 @@ from typing import Optional, List
 from app.schemas.agent import ParamDefinition
 
 
+class NotificationChannelCreate(BaseModel):
+    channel_type: str
+    name: Optional[str] = None
+    agent_id: Optional[str] = None
+    input_params: Optional[List[ParamDefinition]] = None
+    message_field: Optional[str] = None
+    is_enabled: Optional[bool] = True
+
+
 class NotificationChannelUpdate(BaseModel):
     name: Optional[str] = None
     agent_id: Optional[str] = None

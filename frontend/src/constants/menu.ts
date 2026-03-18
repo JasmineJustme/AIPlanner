@@ -7,7 +7,6 @@ import {
   SettingOutlined,
   ApiOutlined,
   ApartmentOutlined,
-  BranchesOutlined,
   DatabaseOutlined,
   OpenAIOutlined,
   BellOutlined,
@@ -54,8 +53,6 @@ export const menuConfig: MenuItem[] = [
     icon: SettingOutlined,
     children: [
       { key: 'config-agents', label: 'Agent 管理', icon: ApiOutlined, path: ROUTES.CONFIG_AGENTS },
-      { key: 'config-workflows', label: 'Workflow 管理', icon: BranchesOutlined, path: ROUTES.CONFIG_WORKFLOWS },
-      { key: 'config-wagents', label: 'W-Agent 管理', icon: RobotOutlined, path: ROUTES.CONFIG_WAGENTS },
       { key: 'config-datasources', label: '数据源配置', icon: DatabaseOutlined, path: ROUTES.CONFIG_DATASOURCES },
       { key: 'config-responsibilities', label: '工作职责配置', icon: ProfileOutlined, path: ROUTES.CONFIG_RESPONSIBILITIES },
       { key: 'config-llm', label: '大模型配置', icon: OpenAIOutlined, path: ROUTES.CONFIG_LLM },
