@@ -63,13 +63,13 @@ const ORCHESTRATION_FIXED_JSON_OUTPUT_FORMAT = `请严格返回 JSON 对象，�
 
 const TODO_ANALYSIS_FIXED_JSON_OUTPUT_FORMAT = `请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "todos": [\n    {\n      "todo_summary": "待办摘要",\n      "task_description": "详细任务描述",\n      "priority": "high | medium | low",\n      "urgency_reason": "紧急性原因",\n      "start_recurring": false,\n      "confirm_by": null,\n      "executor": "user | system",\n      "tags": ["标签1", "标签2"],\n      "project": "项目名称",\n      "responsibility": "主要来源职责（字符串）",\n      "responsibilities": ["来源职责1", "来源职责2"]\n    }\n  ]\n}\n若没有可发掘待办，请返回 {"todos": []}。`;
 
-const TODO_DEDUP_FIXED_JSON_OUTPUT_FORMAT = `请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "duplicates": [\n    {\n      "source_id": "重复任务ID",\n      "target_id": "保留任务ID",\n      "reason": "判重理由"\n    }\n  ]\n}\n若没有可发掘待办，请返回 {"duplicates": []}。`;
+const TODO_DEDUP_FIXED_JSON_OUTPUT_FORMAT = `请严格返回 JSON 对象，不要输出 Markdown 代码块，不要输出解释文本。\nJSON 必须包含以下字段：\n{\n  "dedup_results": [\n    {\n      "keep_id": "保留任务ID（输入中的 id）",\n      "remove_ids": ["需移除任务ID（输入中的 id）"],\n      "relation": "same | overlap | contains",\n      "reason": "去重理由"\n    }\n  ]\n}\n若无需去重，请返回 {"dedup_results": []}。`;
 
 const ORCHESTRATION_PROMPT_EXAMPLE = `分析以下待办任务，从可用的Agent、W-Agent和Workflow中选择最佳方案来完成任务。\n\n当前时间：\n{current_time}\n\n待办任务：\n{todo_desc}\n\n可用Agent：\n{agent_desc}\n\n可用W-Agent：\n{wagent_desc}\n\n可用Workflow：\n{workflow_desc}\n\n要求：\n1. 结合任务描述和候选 input_params 自动补全最合适的 input_params。\n2. 必须结合上方“当前时间”为任务生成 start_time 与 deadline。\n3. deadline 不能晚于任务中最早的 due_date；如没有 due_date，请结合当前时间与 estimated_duration_minutes 给出合理 deadline。\n4. 若选择 new_wagent，请给出 steps；否则 steps 可为空数组。\n5. recommended_name 必须与 recommended_id 对应。`;
 
 const TODO_ANALYSIS_PROMPT_EXAMPLE = `请根据数据源信息与工作职责，发掘潜在的待办任务。\n\n当前时间：\n{current_time}\n\n数据源信息：\n{datasource_info}\n\n工作职责：\n{responsibilities}\n\n要求：\n1. 输出必须与固定 JSON 结构一致。\n2. priority 仅可为 high / medium / low。\n3. 只输出可执行、可落地的待办。\n4. 若无待办则返回空数组。`;
 
-const TODO_DEDUP_PROMPT_EXAMPLE = `请识别待办列表中语义重复或高度相似的任务，并给出去重建议。\n\n当前时间：\n{current_time}\n\n待办列表：\n{todo_desc}\n\n要求：\n1. 仅输出固定 JSON 结构。\n2. source_id 必须是需要标记为重复的任务，target_id 是建议保留的任务。\n3. 每条重复关系必须给出简要 reason。\n4. 不确定时不要强行合并，返回空数组。`;
+const TODO_DEDUP_PROMPT_EXAMPLE = `请识别系统待办列表中的可去重关系（相同关系、重叠关系、包含关系），并直接输出去重结果。\n\n当前时间：\n{current_time}\n\n待办列表：\n{todo_desc}\n\n要求：\n1. 仅输出固定 JSON 结构。\n2. keep_id 必须是保留任务，remove_ids 是需要移除的任务。\n3. relation 仅可为 same / overlap / contains。\n4. 不确定时不要强行合并，返回空数组。`;
 
 const PROMPT_TEMPLATE_ENHANCEMENT_CONFIG: Record<string, {
   requiredPlaceholders: readonly string[];

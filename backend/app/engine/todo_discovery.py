@@ -220,47 +220,59 @@ class TodoDiscoveryEngine:
             ]
         )
 
-    async def _run_todo_dedup(self, db: AsyncSession) -> list[dict]:
+    def _resolve_dedup_candidate_id(
+        self,
+        raw_id: object,
+        candidates_by_id: dict[str, dict],
+        db_candidates_by_real_id: dict[str, str],
+    ) -> str | None:
+        candidate_id = str(raw_id or "").strip()
+        if not candidate_id:
+            return None
+        if candidate_id in candidates_by_id:
+            return candidate_id
+        return db_candidates_by_real_id.get(candidate_id)
+
+    async def _run_todo_dedup(self, db: AsyncSession, candidates: list[dict], dedup_at: datetime) -> dict:
         cfg_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "todo_dedup"))
         llm_cfg = cfg_result.scalar_one_or_none()
         if not llm_cfg:
-            return []
+            return {"removed_candidate_ids": set(), "touched_keep_candidate_ids": set(), "duplicates": []}
 
-        result = await db.execute(
-            select(Todo).where(
-                Todo.source == "system",
-                Todo.status != "completed",
-            )
-        )
-        todos = result.scalars().all()
-        if len(todos) < 2:
-            return []
-
-        for todo in todos:
-            todo.duplicate_of = None
+        if len(candidates) < 2:
+            return {"removed_candidate_ids": set(), "touched_keep_candidate_ids": set(), "duplicates": []}
 
         todo_desc = "\n".join(
             [
-                f"- id={t.id}; title={t.title}; description={t.description or ''}; priority={t.priority}; project={t.project or ''}"
-                for t in todos
+                (
+                    f"- id={item['candidate_id']}; title={item['title']}; description={item['description'] or ''}; "
+                    f"priority={item['priority'] or 'medium'}; project={item['project'] or ''}; "
+                    f"status={item.get('status') or 'pending_confirm'}"
+                )
+                for item in candidates
             ]
         )
         default_prompt = (
-            "请识别以下待办中语义重复的任务。\n"
+            "请识别以下系统待办中的可去重关系（相同关系、重叠关系、包含关系）。\n"
             "当前时间:\n{current_time}\n\n"
             "待办列表:\n{todo_desc}\n\n"
-            "仅返回 JSON：{\"duplicates\":[{\"source_id\":\"...\",\"target_id\":\"...\",\"reason\":\"...\"}]}。"
-            "若没有可发掘待办，请返回 {\"duplicates\": []}。"
+            "仅返回 JSON："
+            "{\"dedup_results\":[{\"keep_id\":\"...\",\"remove_ids\":[\"...\"],\"relation\":\"same|overlap|contains\",\"reason\":\"...\"}]}。"
+            "若无需去重，请返回 {\"dedup_results\": []}。"
         )
         prompt = self._render_prompt_template(
             llm_cfg.prompt_template or default_prompt,
             {
-                "current_time": datetime.now(UTC).replace(tzinfo=None, microsecond=0).isoformat(),
+                "current_time": dedup_at.isoformat(),
                 "todo_desc": todo_desc,
             },
         )
-        if "duplicates" not in prompt:
-            prompt = f"{prompt}\n\n仅返回 JSON：{{\"duplicates\":[{{\"source_id\":\"...\",\"target_id\":\"...\",\"reason\":\"...\"}}]}}"
+        if "dedup_results" not in prompt and "duplicates" not in prompt:
+            prompt = (
+                f"{prompt}\n\n"
+                "仅返回 JSON："
+                "{\"dedup_results\":[{\"keep_id\":\"...\",\"remove_ids\":[\"...\"],\"relation\":\"same|overlap|contains\",\"reason\":\"...\"}]}"
+            )
 
         logger.info("Todo dedup LLM prompt:\n{}", prompt)
         response = await llm_client.chat(
@@ -274,37 +286,80 @@ class TodoDiscoveryEngine:
         await llm_client.log_usage(db, "todo_dedup", llm_cfg.model_name or "", response.get("usage", {}))
 
         payload = self._extract_json_payload(response.get("content", ""))
-        duplicates_raw = payload.get("duplicates") if isinstance(payload, dict) else None
-        if not isinstance(duplicates_raw, list):
-            await db.flush()
-            return []
+        results_raw = payload.get("dedup_results") if isinstance(payload, dict) else None
+        if not isinstance(results_raw, list):
+            legacy = payload.get("duplicates") if isinstance(payload, dict) else None
+            results_raw = legacy if isinstance(legacy, list) else []
 
-        by_id = {todo.id: todo for todo in todos}
+        candidates_by_id = {str(item["candidate_id"]): item for item in candidates}
+        db_candidates_by_real_id = {
+            str(item["todo"].id): str(item["candidate_id"])
+            for item in candidates
+            if item.get("kind") == "existing" and item.get("todo") is not None
+        }
+        parent = {candidate_id: candidate_id for candidate_id in candidates_by_id}
+
+        def find(candidate_id: str) -> str:
+            while parent[candidate_id] != candidate_id:
+                parent[candidate_id] = parent[parent[candidate_id]]
+                candidate_id = parent[candidate_id]
+            return candidate_id
+
+        def union(remove_candidate_id: str, keep_candidate_id: str) -> bool:
+            remove_root = find(remove_candidate_id)
+            keep_root = find(keep_candidate_id)
+            if remove_root == keep_root:
+                return False
+            parent[remove_root] = keep_root
+            return True
+
         dedup_links: list[dict] = []
-        for rel in duplicates_raw:
+        for rel in results_raw:
             if not isinstance(rel, dict):
                 continue
-            source_id = str(rel.get("source_id") or "").strip()
-            target_id = str(rel.get("target_id") or "").strip()
-            if not source_id or not target_id or source_id == target_id:
-                continue
-            source_todo = by_id.get(source_id)
-            target_todo = by_id.get(target_id)
-            if not source_todo or not target_todo:
-                continue
-            source_todo.duplicate_of = target_id
-            dedup_links.append(
-                {
-                    "source_id": source_id,
-                    "source_title": source_todo.title,
-                    "target_id": target_id,
-                    "target_title": target_todo.title,
-                    "reason": str(rel.get("reason") or ""),
-                }
-            )
+            relation = str(rel.get("relation") or "same").strip().lower()
+            if relation not in {"same", "overlap", "contains"}:
+                relation = "same"
+            reason = str(rel.get("reason") or "")
 
-        await db.flush()
-        return dedup_links
+            keep_id = self._resolve_dedup_candidate_id(
+                rel.get("keep_id") or rel.get("target_id"),
+                candidates_by_id,
+                db_candidates_by_real_id,
+            )
+            if not keep_id:
+                continue
+
+            remove_ids_raw = rel.get("remove_ids")
+            if not isinstance(remove_ids_raw, list):
+                legacy_source = rel.get("source_id")
+                remove_ids_raw = [legacy_source] if legacy_source else []
+
+            for raw_remove_id in remove_ids_raw:
+                remove_id = self._resolve_dedup_candidate_id(raw_remove_id, candidates_by_id, db_candidates_by_real_id)
+                if not remove_id or remove_id == keep_id:
+                    continue
+                merged = union(remove_id, keep_id)
+                if not merged:
+                    continue
+                dedup_links.append(
+                    {
+                        "remove_id": remove_id,
+                        "remove_title": candidates_by_id[remove_id]["title"],
+                        "keep_id": keep_id,
+                        "keep_title": candidates_by_id[keep_id]["title"],
+                        "relation": relation,
+                        "reason": reason,
+                    }
+                )
+
+        removed_candidate_ids = {candidate_id for candidate_id in parent if find(candidate_id) != candidate_id}
+        touched_keep_candidate_ids = {find(candidate_id) for candidate_id in removed_candidate_ids}
+        return {
+            "removed_candidate_ids": removed_candidate_ids,
+            "touched_keep_candidate_ids": touched_keep_candidate_ids,
+            "duplicates": dedup_links,
+        }
 
     async def smart_discover(self, db: AsyncSession) -> dict:
         # Always sync datasources first, then analyze synced context.
@@ -366,25 +421,93 @@ class TodoDiscoveryEngine:
         payload = self._extract_json_payload(response.get("content", ""))
         discovered = self._extract_discovered_todos(payload)
 
-        created_items: list[Todo] = []
+        prepared_discovered: list[dict] = []
         for item in discovered:
             responsibility_titles = item.get("responsibility_titles") or []
             responsibility_ids = self._resolve_responsibility_ids(responsibility_titles, responsibility_lookup)
-            todo = Todo(
-                title=item["title"],
-                description=item.get("description"),
-                status="pending_confirm",
-                priority=item.get("priority") or "medium",
-                source="system",
-                execution_mode=item.get("execution_mode") or "system",
-                due_date=item.get("due_date"),
-                tags=item.get("tags") or [],
-                responsibility_ids=responsibility_ids,
-                responsibility_titles=responsibility_titles,
-                project=item.get("project"),
-                review_reason=item.get("review_reason"),
-                is_recurring=bool(item.get("is_recurring")),
+            prepared_discovered.append(
+                {
+                    "title": item["title"],
+                    "description": item.get("description"),
+                    "status": "pending_confirm",
+                    "priority": item.get("priority") or "medium",
+                    "source": "system",
+                    "execution_mode": item.get("execution_mode") or "system",
+                    "due_date": item.get("due_date"),
+                    "tags": item.get("tags") or [],
+                    "responsibility_ids": responsibility_ids,
+                    "responsibility_titles": responsibility_titles,
+                    "project": item.get("project"),
+                    "review_reason": item.get("review_reason"),
+                    "is_recurring": bool(item.get("is_recurring")),
+                }
             )
+
+        dedup_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        existing_system_result = await db.execute(
+            select(Todo).where(
+                Todo.source == "system",
+                Todo.status != "completed",
+            )
+        )
+        existing_system_todos = existing_system_result.scalars().all()
+        dedup_candidates: list[dict] = []
+        for todo in existing_system_todos:
+            dedup_candidates.append(
+                {
+                    "candidate_id": f"db:{todo.id}",
+                    "kind": "existing",
+                    "todo": todo,
+                    "title": todo.title,
+                    "description": todo.description,
+                    "priority": todo.priority,
+                    "project": todo.project,
+                    "status": todo.status,
+                }
+            )
+        for idx, item in enumerate(prepared_discovered):
+            dedup_candidates.append(
+                {
+                    "candidate_id": f"new:{idx}",
+                    "kind": "new",
+                    "draft": item,
+                    "title": item["title"],
+                    "description": item.get("description"),
+                    "priority": item.get("priority"),
+                    "project": item.get("project"),
+                    "status": item.get("status"),
+                }
+            )
+
+        dedup_result = await self._run_todo_dedup(db, dedup_candidates, dedup_at)
+        removed_candidate_ids = set(dedup_result.get("removed_candidate_ids") or set())
+        touched_keep_candidate_ids = set(dedup_result.get("touched_keep_candidate_ids") or set())
+        dedup_links = dedup_result.get("duplicates") or []
+
+        for candidate in dedup_candidates:
+            if candidate.get("kind") != "existing":
+                continue
+            todo = candidate.get("todo")
+            if not todo:
+                continue
+            candidate_id = str(candidate.get("candidate_id"))
+            if candidate_id in removed_candidate_ids:
+                await db.delete(todo)
+                continue
+            if candidate_id in touched_keep_candidate_ids:
+                todo.created_at = dedup_at
+
+        created_items: list[Todo] = []
+        for candidate in dedup_candidates:
+            if candidate.get("kind") != "new":
+                continue
+            candidate_id = str(candidate.get("candidate_id"))
+            if candidate_id in removed_candidate_ids:
+                continue
+            item = candidate.get("draft") or {}
+            todo = Todo(**item)
+            if candidate_id in touched_keep_candidate_ids:
+                todo.created_at = dedup_at
             db.add(todo)
             created_items.append(todo)
 
@@ -392,12 +515,10 @@ class TodoDiscoveryEngine:
         for todo in created_items:
             await db.refresh(todo)
 
-        dedup_links = await self._run_todo_dedup(db)
-
         return {
             "synced_datasource_count": len(enabled_ds),
             "created_count": len(created_items),
-            "dedup_count": len(dedup_links),
+            "dedup_count": len(removed_candidate_ids),
             "created_todo_ids": [todo.id for todo in created_items],
             "duplicates": dedup_links,
         }

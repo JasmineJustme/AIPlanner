@@ -84,8 +84,6 @@ export default function TodosPage() {
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
-  const [blinkTodoId, setBlinkTodoId] = useState<string | null>(null);
-  const blinkTimerRef = useRef<number | null>(null);
   const requestSeqRef = useRef(0);
   const [data, setData] = useState<{ items: Todo[]; total: number; page: number; size: number; pages: number }>({
     items: [],
@@ -386,7 +384,7 @@ export default function TodosPage() {
       const payload = (body?.data ?? body) as { created_count?: number; dedup_count?: number };
       const createdCount = Number(payload.created_count ?? 0);
       const dedupCount = Number(payload.dedup_count ?? 0);
-      message.success(`智能发掘完成：新增 ${createdCount} 条，去重标记 ${dedupCount} 条`);
+      message.success(`智能发掘完成：新增 ${createdCount} 条，直接去重 ${dedupCount} 条`);
       await loadTodos();
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string };
@@ -395,29 +393,6 @@ export default function TodosPage() {
       setDiscovering(false);
     }
   };
-
-  const focusTodoRow = (todoId: string) => {
-    const target = document.getElementById(`todo-row-${todoId}`);
-    if (!target) {
-      message.warning('目标任务不在当前页，请调整筛选或翻页后查看');
-      return;
-    }
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    setBlinkTodoId(todoId);
-    if (blinkTimerRef.current) {
-      window.clearTimeout(blinkTimerRef.current);
-    }
-    blinkTimerRef.current = window.setTimeout(() => {
-      setBlinkTodoId(null);
-      blinkTimerRef.current = null;
-    }, 1400);
-  };
-
-  useEffect(() => () => {
-    if (blinkTimerRef.current) {
-      window.clearTimeout(blinkTimerRef.current);
-    }
-  }, []);
 
   const getExecutionMode = (record: Todo) => record.execution_mode || TodoExecutionMode.System;
   const isUserExecution = (record: Todo) => getExecutionMode(record) === TodoExecutionMode.User;
@@ -448,7 +423,6 @@ export default function TodosPage() {
   const renderExpandedRow = (record: Todo) => {
     const executionMode = getExecutionMode(record);
     const modeConfig = TODO_EXECUTION_MODE_MAP[executionMode] || TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System];
-    const duplicateTarget = record.duplicate_of ? data.items.find((item) => item.id === record.duplicate_of) : undefined;
     const responsibilities = Array.isArray(record.responsibility_titles) ? record.responsibility_titles : [];
 
     return (
@@ -488,18 +462,6 @@ export default function TodosPage() {
           </Descriptions.Item>
           <Descriptions.Item label="添加时间">{formatDate(record.created_at)}</Descriptions.Item>
           <Descriptions.Item label="完成时间">{formatDate(record.completed_at)}</Descriptions.Item>
-          <Descriptions.Item label="重复任务">
-            {record.duplicate_of ? (
-              <Space>
-                <Text type="warning">与以下任务重复：</Text>
-                <Button type="link" size="small" onClick={() => focusTodoRow(record.duplicate_of!)}>
-                  {duplicateTarget?.title || `任务 ${record.duplicate_of}`}
-                </Button>
-              </Space>
-            ) : (
-              '无'
-            )}
-          </Descriptions.Item>
         </Descriptions>
       </div>
     );
@@ -715,16 +677,6 @@ export default function TodosPage() {
 
   return (
     <div>
-      <style>
-        {`
-          .todo-duplicate-row td { background: #fff1f0 !important; }
-          .todo-blink-row td { animation: todoBlink 0.7s ease-in-out 1; }
-          @keyframes todoBlink {
-            0% { background: #ffe58f; }
-            100% { background: inherit; }
-          }
-        `}
-      </style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>
           待办任务
@@ -827,8 +779,6 @@ export default function TodosPage() {
                 pagination={false}
                 locale={{ emptyText: '暂无用户执行任务' }}
                 expandable={{ expandedRowRender: renderExpandedRow }}
-                rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
-                onRow={(record) => ({ id: `todo-row-${record.id}` })}
               />
             </Card>
           ) : null}
@@ -852,8 +802,6 @@ export default function TodosPage() {
                 pagination={false}
                 locale={{ emptyText: '暂无系统执行任务' }}
                 expandable={{ expandedRowRender: renderExpandedRow }}
-                rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
-                onRow={(record) => ({ id: `todo-row-${record.id}` })}
               />
             </Card>
           ) : null}

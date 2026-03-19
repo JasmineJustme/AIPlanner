@@ -15,7 +15,6 @@ export interface Todo {
   project?: string;
   review_status?: string;
   review_reason?: string;
-  duplicate_of?: string;
   orchestration_id?: string;
   is_recurring: boolean;
   recurrence_cron?: string;
