@@ -6,10 +6,12 @@ import {
   InputNumber,
   TimePicker,
   Switch,
+  Tooltip,
   Button,
   message,
   Typography,
 } from 'antd';
+import { QuestionCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getSettings, updateSettings } from '@/api/settings';
 
@@ -52,6 +54,8 @@ export default function SettingsPage() {
         task_timeout_seconds: get('task_timeout_seconds', 600),
         sync_interval_hours: get('sync_interval_hours', 24),
         sync_require_confirm: get('sync_require_confirm', true),
+        auto_smart_discovery_enabled: get('auto_smart_discovery_enabled', false),
+        auto_smart_discovery_interval_minutes: get('auto_smart_discovery_interval_minutes', 15),
         data_retention_days: get('data_retention_days', 365),
       });
 
@@ -84,6 +88,8 @@ export default function SettingsPage() {
         task_timeout_seconds: values.task_timeout_seconds,
         sync_interval_hours: values.sync_interval_hours,
         sync_require_confirm: values.sync_require_confirm,
+        auto_smart_discovery_enabled: values.auto_smart_discovery_enabled,
+        auto_smart_discovery_interval_minutes: values.auto_smart_discovery_interval_minutes,
         data_retention_days: values.data_retention_days,
       };
       await updateSettings(payload);
@@ -127,6 +133,32 @@ export default function SettingsPage() {
           </Form.Item>
           <Form.Item name="sync_require_confirm" label="同步后需要确认" valuePropName="checked">
             <Switch />
+          </Form.Item>
+          <Form.Item
+            name="auto_smart_discovery_enabled"
+            label={(
+              <span>
+                自动智能发掘待办
+                <Tooltip title="开启后系统将每个时间间隔后根据工作职责对数据源进行一次智能发掘待办。">
+                  <QuestionCircleOutlined style={{ marginLeft: 6, color: '#999' }} />
+                </Tooltip>
+              </span>
+            )}
+            valuePropName="checked"
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.auto_smart_discovery_enabled !== curr.auto_smart_discovery_enabled}>
+            {({ getFieldValue }) => {
+              if (!getFieldValue('auto_smart_discovery_enabled')) {
+                return null;
+              }
+              return (
+                <Form.Item name="auto_smart_discovery_interval_minutes" label="智能发掘时间间隔（分钟）">
+                  <InputNumber min={1} max={60} style={{ width: 120 }} />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
         </Card>
 

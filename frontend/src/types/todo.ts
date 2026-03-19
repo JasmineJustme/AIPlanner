@@ -8,6 +8,7 @@ export interface Todo {
   execution_mode: string;
   source_ref?: string;
   due_date?: string;
+  completed_at?: string;
   tags: string[];
   responsibility_ids: string[];
   responsibility_titles: string[];

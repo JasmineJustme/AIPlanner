@@ -1,10 +1,12 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.engine.todo_discovery import todo_discovery_engine
-from app.models import Todo
+from app.models import Todo, ScheduleTask
 from app.services.llm_client import LLMServiceError
 from pydantic import BaseModel
 from app.schemas.todo import TodoCreate, TodoUpdate, TodoResponse, TodoReviewConfirm
@@ -42,19 +44,46 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
     )
     items = result.scalars().all()
     changed = False
+    now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+
+    orchestration_ids = [todo.orchestration_id for todo in items if todo.orchestration_id]
+    latest_completion_by_orch: dict[str, datetime] = {}
+    if orchestration_ids:
+        tasks_result = await db.execute(
+            select(ScheduleTask).where(
+                ScheduleTask.orchestration_id.in_(orchestration_ids),
+                ScheduleTask.completed_at.is_not(None),
+            )
+        )
+        for task in tasks_result.scalars().all():
+            orch_id = str(task.orchestration_id or "")
+            if not orch_id or task.completed_at is None:
+                continue
+            prev = latest_completion_by_orch.get(orch_id)
+            if prev is None or task.completed_at > prev:
+                latest_completion_by_orch[orch_id] = task.completed_at
 
     for todo in items:
         entry = get_orchestration_entry(todo.orchestration_id or "") if todo.orchestration_id else None
         if not entry:
-            if todo.status != "pending_confirm" or todo.orchestration_id is not None:
+            if todo.status != "pending_confirm" or todo.orchestration_id is not None or todo.completed_at is not None:
                 todo.status = "pending_confirm"
                 todo.orchestration_id = None
+                todo.completed_at = None
                 changed = True
             continue
 
         next_status = map_orchestration_status_to_todo_status(entry.get("status"))
         if todo.status != next_status:
             todo.status = next_status
+            changed = True
+        if next_status == "completed":
+            completed_at = latest_completion_by_orch.get(todo.orchestration_id or "")
+            if todo.completed_at != (completed_at or now):
+                todo.completed_at = completed_at or now
+                changed = True
+        elif todo.completed_at is not None:
+            todo.completed_at = None
             changed = True
 
     if changed:
@@ -190,6 +219,45 @@ async def complete_todo(
         raise HTTPException(status_code=400, detail="仅待确认的用户执行任务支持手动完成")
 
     todo.status = "completed"
+    todo.completed_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    todo.orchestration_id = None
+    await db.flush()
+    await db.refresh(todo)
+    return {"code": 200, "message": "success", "data": TodoResponse.model_validate(todo)}
+
+
+@router.patch("/{todo_id}/confirm")
+async def confirm_user_todo(
+    todo_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    todo = await _get_todo_or_404(todo_id, db)
+    if todo.execution_mode != "user":
+        raise HTTPException(status_code=400, detail="仅用户执行任务支持确认")
+    if todo.status != "pending_confirm":
+        raise HTTPException(status_code=400, detail="仅待确认的用户执行任务支持确认")
+
+    todo.status = "pending"
+    todo.completed_at = None
+    todo.orchestration_id = None
+    await db.flush()
+    await db.refresh(todo)
+    return {"code": 200, "message": "success", "data": TodoResponse.model_validate(todo)}
+
+
+@router.patch("/{todo_id}/cancel")
+async def cancel_user_todo(
+    todo_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    todo = await _get_todo_or_404(todo_id, db)
+    if todo.execution_mode != "user":
+        raise HTTPException(status_code=400, detail="仅用户执行任务支持取消")
+    if todo.status != "pending":
+        raise HTTPException(status_code=400, detail="仅待处理的用户执行任务支持取消")
+
+    todo.status = "pending_confirm"
+    todo.completed_at = None
     todo.orchestration_id = None
     await db.flush()
     await db.refresh(todo)

@@ -4,7 +4,6 @@ export const ROUTES = {
   DASHBOARD: '/dashboard',
 
   TODOS: '/todos',
-  TODOS_REVIEW: '/todos/review',
 
   ORCHESTRATION: '/orchestration',
   SCHEDULING: '/scheduling',

@@ -13,6 +13,22 @@ from app.schemas.settings import (
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
+def _normalize_system_setting_payload(key: str, value: object) -> dict:
+    raw = value.get("value") if isinstance(value, dict) and "value" in value else value
+
+    if key == "auto_smart_discovery_enabled":
+        return {"value": bool(raw)}
+
+    if key == "auto_smart_discovery_interval_minutes":
+        try:
+            minutes = int(raw)
+        except (TypeError, ValueError):
+            minutes = 15
+        return {"value": max(1, min(minutes, 60))}
+
+    return value if isinstance(value, dict) else {"value": value}
+
+
 async def _ensure_notification_pref_channel_map_column(db: AsyncSession) -> None:
     bind = db.get_bind()
     if not bind or bind.dialect.name != "sqlite":
@@ -84,12 +100,13 @@ async def update_settings(
     db: AsyncSession = Depends(get_db),
 ):
     for key, value in payload.settings.items():
+        normalized_value = _normalize_system_setting_payload(key, value)
         result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
         setting = result.scalar_one_or_none()
         if setting:
-            setting.value = value if isinstance(value, dict) else {"value": value}
+            setting.value = normalized_value
         else:
-            setting = SystemSetting(key=key, value=value if isinstance(value, dict) else {"value": value})
+            setting = SystemSetting(key=key, value=normalized_value)
             db.add(setting)
     await db.flush()
     return {"code": 200, "message": "success", "data": None}

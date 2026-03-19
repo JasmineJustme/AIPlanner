@@ -18,6 +18,12 @@ export const updateTodo = (todoId: string, data: Record<string, unknown>) =>
 export const completeTodo = (todoId: string) =>
   client.patch(`/todos/${todoId}/complete`);
 
+export const confirmUserTodo = (todoId: string) =>
+  client.patch(`/todos/${todoId}/confirm`);
+
+export const cancelUserTodo = (todoId: string) =>
+  client.patch(`/todos/${todoId}/cancel`);
+
 export const rerunTodo = (todoId: string) =>
   client.post(`/todos/${todoId}/rerun`);
 
@@ -30,19 +36,6 @@ export const batchImportTodos = (file: File) => {
   return client.post('/todos/batch-import', formData);
 };
 
-export const getReviewPending = () => client.get('/todos/review-pending');
-
-export const confirmReview = (todoId: string, data?: Record<string, unknown>) =>
-  client.patch(`/todos/review/${todoId}/confirm`, data);
-
-export const rejectReview = (todoId: string) =>
-  client.patch(`/todos/review/${todoId}/reject`);
-
-export const batchConfirmReview = (todoIds: string[]) =>
-  client.post('/todos/review/batch-confirm', { todo_ids: todoIds });
-
-export const batchRejectReview = (todoIds: string[]) =>
-  client.post('/todos/review/batch-reject', { todo_ids: todoIds });
 
 export const smartDiscoverTodos = () =>
   client.post('/todos/smart-discover', undefined, { timeout: 180000 });

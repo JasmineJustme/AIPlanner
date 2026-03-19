@@ -10,6 +10,7 @@ class TodoCreate(BaseModel):
     source: str = "manual"
     execution_mode: str = "system"
     due_date: datetime | None = None
+    completed_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     responsibility_ids: list[str] = Field(default_factory=list)
     responsibility_titles: list[str] = Field(default_factory=list)

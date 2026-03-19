@@ -38,6 +38,7 @@ import PriorityTag from '@/components/PriorityTag';
 import JsonViewer from '@/components/JsonViewer';
 import { sseManager } from '@/api/sse';
 import dayjs from 'dayjs';
+import { useLocation } from 'react-router-dom';
 
 const { Title } = Typography;
 
@@ -66,6 +67,12 @@ const GANTT_WINDOW_OPTIONS = [
   { label: '14天', value: 14 },
   { label: '30天', value: 30 },
 ];
+
+function parseStatusFilterFromSearch(search: string): string {
+  const status = new URLSearchParams(search).get('status') || '';
+  const allowed = STATUS_OPTIONS.map((item) => item.value);
+  return allowed.includes(status) ? status : '';
+}
 
 function GanttView({ tasks, windowDays }: { tasks: Array<{ id: string; name: string; start?: string | null; end?: string | null; status: string }>; windowDays: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -164,11 +171,12 @@ function GanttView({ tasks, windowDays }: { tasks: Array<{ id: string; name: str
 }
 
 export default function SchedulingPage() {
+  const location = useLocation();
   const [tasks, setTasks] = useState<ScheduleTask[]>([]);
   const [plans, setPlans] = useState<SchedulePlan[]>([]);
   const [ganttTasks, setGanttTasks] = useState<Array<{ id: string; name: string; start?: string | null; end?: string | null; status: string }>>([]);
   const [loading, setLoading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>(() => parseStatusFilterFromSearch(location.search));
   const [planFilter, setPlanFilter] = useState<string>('');
   const [ganttWindowDays, setGanttWindowDays] = useState<number>(7);
 
@@ -225,6 +233,11 @@ export default function SchedulingPage() {
     loadGantt();
     loadPlans();
   }, [loadTasks, loadGantt, loadPlans]);
+
+  useEffect(() => {
+    const next = parseStatusFilterFromSearch(location.search);
+    setStatusFilter((prev) => (prev === next ? prev : next));
+  }, [location.search]);
 
   useEffect(() => {
     sseManager.connect();

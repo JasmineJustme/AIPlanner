@@ -250,10 +250,26 @@ async def sync_todos_for_orchestration(db: AsyncSession, orch_id: str, entry: di
     orchestration_status = target_entry.get("status")
     todo_status = map_orchestration_status_to_todo_status(orchestration_status)
     should_clear_orchestration_id = orchestration_status == "cancelled"
+    completed_at: datetime | None = None
+    if todo_status == "completed":
+        schedule_task_result = await db.execute(
+            select(ScheduleTask).where(
+                ScheduleTask.orchestration_id == orch_id,
+                ScheduleTask.completed_at.is_not(None),
+            )
+        )
+        for task in schedule_task_result.scalars().all():
+            if task.completed_at is None:
+                continue
+            if completed_at is None or task.completed_at > completed_at:
+                completed_at = task.completed_at
+        if completed_at is None:
+            completed_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
 
     for todo in todos:
         todo.status = todo_status
         todo.orchestration_id = None if should_clear_orchestration_id else orch_id
+        todo.completed_at = completed_at if todo_status == "completed" else None
 
     await db.flush()
 

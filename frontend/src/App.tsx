@@ -9,7 +9,6 @@ import { Spin } from 'antd';
 const SetupPage = lazy(() => import('@/pages/Setup'));
 const DashboardPage = lazy(() => import('@/pages/Dashboard'));
 const TodosPage = lazy(() => import('@/pages/Todos'));
-const TodosReviewPage = lazy(() => import('@/pages/Todos/Review'));
 const OrchestrationPage = lazy(() => import('@/pages/Orchestration'));
 const SchedulingPage = lazy(() => import('@/pages/Scheduling'));
 const HistoryPage = lazy(() => import('@/pages/History'));
@@ -46,7 +45,6 @@ export default function App() {
               <Route path="/dashboard" element={<DashboardPage />} />
 
               <Route path="/todos" element={<TodosPage />} />
-              <Route path="/todos/review" element={<TodosReviewPage />} />
 
               <Route path="/orchestration" element={<OrchestrationPage />} />
               <Route path="/scheduling" element={<SchedulingPage />} />

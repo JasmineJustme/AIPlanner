@@ -22,8 +22,10 @@ import {
 import { PlusOutlined, QuestionCircleOutlined, RedoOutlined, UploadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
-import { useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import {
+  cancelUserTodo,
+  confirmUserTodo,
   completeTodo,
   createTodo,
   deleteTodo,
@@ -46,7 +48,6 @@ import {
   TodoExecutionMode,
   TodoStatus,
 } from '@/constants/status';
-import { ROUTES } from '@/constants/routes';
 
 const { Title, Text } = Typography;
 
@@ -67,8 +68,14 @@ const EXECUTION_MODE_OPTIONS = Object.entries(TODO_EXECUTION_MODE_MAP).map(([k, 
   label: v.text,
 }));
 
+function getStatusFromSearch(search: string): string | undefined {
+  const status = new URLSearchParams(search).get('status') || undefined;
+  if (!status) return undefined;
+  return Object.prototype.hasOwnProperty.call(TODO_STATUS_MAP, status) ? status : undefined;
+}
+
 export default function TodosPage() {
-  const navigate = useNavigate();
+  const location = useLocation();
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
@@ -79,6 +86,7 @@ export default function TodosPage() {
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   const [blinkTodoId, setBlinkTodoId] = useState<string | null>(null);
   const blinkTimerRef = useRef<number | null>(null);
+  const requestSeqRef = useRef(0);
   const [data, setData] = useState<{ items: Todo[]; total: number; page: number; size: number; pages: number }>({
     items: [],
     total: 0,
@@ -91,7 +99,9 @@ export default function TodosPage() {
     priority?: string;
     source?: string;
     dateRange?: [string, string] | null;
-  }>({});
+  }>({
+    status: getStatusFromSearch(location.search),
+  });
   const [form] = Form.useForm();
 
   const patchTodo = (todoId: string, updater: (todo: Todo) => Todo) => {
@@ -102,6 +112,7 @@ export default function TodosPage() {
   };
 
   const loadTodos = useCallback(async () => {
+    const requestSeq = ++requestSeqRef.current;
     setLoading(true);
     try {
       const res = await getTodos({
@@ -113,6 +124,9 @@ export default function TodosPage() {
       });
       const body = (res as { data: { data?: typeof data } }).data;
       const payload = body?.data ?? body;
+      if (requestSeq !== requestSeqRef.current) {
+        return;
+      }
       if (payload && typeof payload === 'object' && 'items' in payload) {
         setData({
           items: payload.items ?? [],
@@ -123,15 +137,33 @@ export default function TodosPage() {
         });
       }
     } catch {
-      setData((d) => ({ ...d, items: [] }));
+      if (requestSeq === requestSeqRef.current) {
+        setData((d) => ({ ...d, items: [] }));
+      }
     } finally {
-      setLoading(false);
+      if (requestSeq === requestSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [data.page, data.size, filters.status, filters.priority, filters.source]);
 
   useEffect(() => {
     loadTodos();
   }, [loadTodos]);
+
+  useEffect(() => {
+    const statusFromQuery = getStatusFromSearch(location.search);
+    if (!statusFromQuery) {
+      return;
+    }
+    setFilters((prev) => {
+      if (prev.status === statusFromQuery) {
+        return prev;
+      }
+      return { ...prev, status: statusFromQuery };
+    });
+    setData((prev) => ({ ...prev, page: 1 }));
+  }, [location.search]);
 
   const closeDrawer = () => {
     setDrawerOpen(false);
@@ -301,6 +333,36 @@ export default function TodosPage() {
     }
   };
 
+  const handleUserConfirmTask = async (record: Todo) => {
+    setSubmitting(record.id);
+    try {
+      await confirmUserTodo(record.id);
+      message.success('任务已确认，状态更新为待处理');
+      loadTodos();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string };
+      const detail = err?.response?.data?.detail || err?.message || '确认失败';
+      message.error(detail);
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const handleUserCancelTask = async (record: Todo) => {
+    setSubmitting(record.id);
+    try {
+      await cancelUserTodo(record.id);
+      message.success('任务已取消，状态更新为待确认');
+      loadTodos();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string };
+      const detail = err?.response?.data?.detail || err?.message || '取消失败';
+      message.error(detail);
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
   const handleRerunTask = async (record: Todo) => {
     setSubmitting(record.id);
     try {
@@ -425,6 +487,7 @@ export default function TodosPage() {
                   : '无'}
           </Descriptions.Item>
           <Descriptions.Item label="添加时间">{formatDate(record.created_at)}</Descriptions.Item>
+          <Descriptions.Item label="完成时间">{formatDate(record.completed_at)}</Descriptions.Item>
           <Descriptions.Item label="重复任务">
             {record.duplicate_of ? (
               <Space>
@@ -531,6 +594,51 @@ export default function TodosPage() {
         }
 
         if (isUserTodo) {
+          if (record.status === TodoStatus.PendingConfirm) {
+            return (
+              <Space>
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={() => handleUserConfirmTask(record)}
+                  loading={submitting === record.id}
+                >
+                  确认
+                </Button>
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => openEditDrawer(record)}
+                >
+                  编辑
+                </Button>
+                {renderDeleteAction(record)}
+              </Space>
+            );
+          }
+
+          if (record.status === TodoStatus.Pending) {
+            return (
+              <Space>
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={() => handleCompleteTask(record)}
+                  loading={submitting === record.id}
+                >
+                  完成
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => handleUserCancelTask(record)}
+                  loading={submitting === record.id}
+                >
+                  取消
+                </Button>
+              </Space>
+            );
+          }
+
           return (
             <Space>
               <Button
@@ -538,19 +646,13 @@ export default function TodosPage() {
                 size="small"
                 onClick={() => handleCompleteTask(record)}
                 loading={submitting === record.id}
-                disabled={!pendingLike}
+                disabled
               >
                 完成
               </Button>
-              <Button
-                type="link"
-                size="small"
-                onClick={() => openEditDrawer(record)}
-                disabled={!pendingLike}
-              >
-                编辑
+              <Button size="small" disabled>
+                取消
               </Button>
-              {renderDeleteAction(record, !pendingLike)}
             </Space>
           );
         }
@@ -597,6 +699,11 @@ export default function TodosPage() {
 
   const userTodos = data.items.filter((item) => getExecutionMode(item) === TodoExecutionMode.User);
   const systemTodos = data.items.filter((item) => getExecutionMode(item) !== TodoExecutionMode.User);
+  const showOnlyUserModule = filters.status === TodoStatus.Pending;
+  const showOnlySystemModule =
+    filters.status === TodoStatus.Orchestrating || filters.status === TodoStatus.Scheduling;
+  const showUserModule = !showOnlySystemModule;
+  const showSystemModule = !showOnlyUserModule;
 
   if (loading && data.items.length === 0) {
     return (
@@ -626,7 +733,6 @@ export default function TodosPage() {
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
             新建待办
           </Button>
-          <Button onClick={() => navigate(ROUTES.TODOS_REVIEW)}>梳理结果确认</Button>
           <Button onClick={handleSmartDiscover} loading={discovering}>
             智能发掘待办
           </Button>
@@ -702,51 +808,55 @@ export default function TodosPage() {
         </Card>
       ) : (
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <Card
-            title="用户执行模块"
-            extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.User].color}>{userTodos.length}</Tag>}
-          >
-            <Alert
-              type="info"
-              showIcon
-              message="用户执行任务只做展示与提醒；待确认时可完成、编辑和删除，已完成后可删除或重新执行。"
-              style={{ marginBottom: 16 }}
-            />
-            <Table
-              rowKey="id"
-              loading={loading}
-              columns={columns}
-              dataSource={userTodos}
-              pagination={false}
-              locale={{ emptyText: '暂无用户执行任务' }}
-              expandable={{ expandedRowRender: renderExpandedRow }}
-              rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
-              onRow={(record) => ({ id: `todo-row-${record.id}` })}
-            />
-          </Card>
+          {showUserModule ? (
+            <Card
+              title="用户执行模块"
+              extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.User].color}>{userTodos.length}</Tag>}
+            >
+              <Alert
+                type="info"
+                showIcon
+                message="用户执行任务：待确认时可确认、编辑和删除；确认后进入待处理，可完成或取消（取消后回到待确认）；已完成后可删除或重新执行。"
+                style={{ marginBottom: 16 }}
+              />
+              <Table
+                rowKey="id"
+                loading={loading}
+                columns={columns}
+                dataSource={userTodos}
+                pagination={false}
+                locale={{ emptyText: '暂无用户执行任务' }}
+                expandable={{ expandedRowRender: renderExpandedRow }}
+                rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
+                onRow={(record) => ({ id: `todo-row-${record.id}` })}
+              />
+            </Card>
+          ) : null}
 
-          <Card
-            title="系统执行模块"
-            extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System].color}>{systemTodos.length}</Tag>}
-          >
-            <Alert
-              type="warning"
-              showIcon
-              message="系统执行任务待确认时可确认、编辑和删除；编排中或调度中不可操作；已完成后可删除或重新执行。"
-              style={{ marginBottom: 16 }}
-            />
-            <Table
-              rowKey="id"
-              loading={loading}
-              columns={columns}
-              dataSource={systemTodos}
-              pagination={false}
-              locale={{ emptyText: '暂无系统执行任务' }}
-              expandable={{ expandedRowRender: renderExpandedRow }}
-              rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
-              onRow={(record) => ({ id: `todo-row-${record.id}` })}
-            />
-          </Card>
+          {showSystemModule ? (
+            <Card
+              title="系统执行模块"
+              extra={<Tag color={TODO_EXECUTION_MODE_MAP[TodoExecutionMode.System].color}>{systemTodos.length}</Tag>}
+            >
+              <Alert
+                type="warning"
+                showIcon
+                message="系统执行任务待确认时可确认、编辑和删除；编排中或调度中不可操作；已完成后可删除或重新执行。"
+                style={{ marginBottom: 16 }}
+              />
+              <Table
+                rowKey="id"
+                loading={loading}
+                columns={columns}
+                dataSource={systemTodos}
+                pagination={false}
+                locale={{ emptyText: '暂无系统执行任务' }}
+                expandable={{ expandedRowRender: renderExpandedRow }}
+                rowClassName={(record) => `${record.duplicate_of ? 'todo-duplicate-row' : ''} ${blinkTodoId === record.id ? 'todo-blink-row' : ''}`.trim()}
+                onRow={(record) => ({ id: `todo-row-${record.id}` })}
+              />
+            </Card>
+          ) : null}
         </Space>
       )}
 

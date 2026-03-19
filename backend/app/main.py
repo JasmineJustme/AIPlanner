@@ -23,6 +23,8 @@ async def _ensure_sqlite_runtime_schema() -> None:
         alter_sql: list[str] = []
         if "execution_mode" not in columns:
             alter_sql.append("ALTER TABLE todos ADD COLUMN execution_mode VARCHAR(20) NOT NULL DEFAULT 'system'")
+        if "completed_at" not in columns:
+            alter_sql.append("ALTER TABLE todos ADD COLUMN completed_at DATETIME")
         if "is_recurring" not in columns:
             alter_sql.append("ALTER TABLE todos ADD COLUMN is_recurring BOOLEAN NOT NULL DEFAULT 0")
         if "recurrence_cron" not in columns:

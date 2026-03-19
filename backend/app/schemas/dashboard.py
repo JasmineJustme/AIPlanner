@@ -4,10 +4,10 @@ from typing import Optional
 
 
 class DashboardStats(BaseModel):
-    today_todos: int = 0
+    today_todo: int = 0
     pending_confirm: int = 0
     running: int = 0
-    completed_today: int = 0
+    today_completed: int = 0
     failed: int = 0
 
 

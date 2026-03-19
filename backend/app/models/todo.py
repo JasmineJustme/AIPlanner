@@ -16,6 +16,7 @@ class Todo(TimestampMixin, Base):
     execution_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="system")
     source_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
     due_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     tags: Mapped[dict | None] = mapped_column(JSON, default=list)
     responsibility_ids: Mapped[list[str] | None] = mapped_column(JSON, default=list)
     responsibility_titles: Mapped[list[str] | None] = mapped_column(JSON, default=list)

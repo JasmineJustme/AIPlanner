@@ -55,7 +55,10 @@ interface SyncStatusItem {
 function extractData<T>(res: unknown): T | null {
   const data = (res as { data?: { data?: T; code?: number } })?.data;
   if (!data || typeof data !== 'object') return null;
-  return (data as { data?: T }).data ?? (data as T);
+  if ('data' in (data as Record<string, unknown>)) {
+    return (data as { data?: T | null }).data ?? null;
+  }
+  return data as T;
 }
 
 export default function DashboardPage() {
@@ -209,15 +212,15 @@ export default function DashboardPage() {
       value: stats?.pending_confirm ?? 0,
       color: '#fa8c16',
       icon: <ClockCircleOutlined />,
-      route: ROUTES.TODOS_REVIEW,
+      route: `${ROUTES.TODOS}?status=pending_confirm`,
     },
     {
       key: 'running',
-      title: '执行中',
+      title: '调度中',
       value: stats?.running ?? 0,
       color: '#fa8c16',
       icon: <SyncOutlined spin />,
-      route: ROUTES.ORCHESTRATION,
+      route: ROUTES.SCHEDULING,
     },
     {
       key: 'today_completed',
@@ -225,7 +228,7 @@ export default function DashboardPage() {
       value: stats?.today_completed ?? 0,
       color: '#52c41a',
       icon: <CheckCircleOutlined />,
-      route: ROUTES.HISTORY,
+      route: `${ROUTES.TODOS}?status=completed`,
     },
     {
       key: 'failed',
@@ -233,7 +236,7 @@ export default function DashboardPage() {
       value: stats?.failed ?? 0,
       color: '#ff4d4f',
       icon: <CloseCircleOutlined />,
-      route: ROUTES.HISTORY,
+      route: `${ROUTES.SCHEDULING}?status=failed`,
     },
   ];
 
