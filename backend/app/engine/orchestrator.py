@@ -244,7 +244,8 @@ JSON 必须包含以下字段：
             if isinstance(raw_params, dict):
                 return list(raw_params.keys())
             return []
-        has_explicit_flag = any(isinstance(item, dict) and "user_fill_enabled" in item for item in raw_params)
+        # user_fill_enabled only controls whether LLM should auto-fill in prompt construction.
+        # Orchestration UI should always allow editing declared input params.
         keys: list[str] = []
         for item in raw_params:
             if hasattr(item, "model_dump"):
@@ -254,11 +255,7 @@ JSON 必须包含以下字段：
             name = item.get("name") or item.get("key") or item.get("field")
             if not name:
                 continue
-            if has_explicit_flag:
-                if item.get("user_fill_enabled"):
-                    keys.append(str(name))
-            else:
-                keys.append(str(name))
+            keys.append(str(name))
         return keys
 
     def _filter_prompt_input_params(self, raw_params):

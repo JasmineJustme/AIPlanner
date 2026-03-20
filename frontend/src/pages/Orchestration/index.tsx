@@ -181,9 +181,10 @@ function OrchestrationCard({
 
   const buildInputParams = (values: Record<string, unknown>) => {
     const editableKeys = detail?.plan?.editable_input_keys;
-    const paramKeys = Array.isArray(editableKeys)
+    const fallbackKeys = Object.keys(detail?.plan?.input_params || {});
+    const paramKeys = Array.isArray(editableKeys) && editableKeys.length > 0
       ? editableKeys
-      : Object.keys(detail?.plan?.input_params || {});
+      : fallbackKeys;
     return paramKeys.reduce<Record<string, unknown>>((acc, key) => {
       acc[key] = values[key];
       return acc;
@@ -549,9 +550,9 @@ function OrchestrationCard({
                   <Collapse.Panel header="输入参数" key="input_params">
                     {(() => {
                       const baseParams = detail.plan?.input_params || {};
-                      const hasEditableKeys = Array.isArray(detail.plan?.editable_input_keys);
-                      const renderKeys = hasEditableKeys
-                        ? (detail.plan?.editable_input_keys || [])
+                      const editableKeys = detail.plan?.editable_input_keys;
+                      const renderKeys = Array.isArray(editableKeys) && editableKeys.length > 0
+                        ? editableKeys
                         : Object.keys(baseParams);
                       if (renderKeys.length === 0) {
                         return <Text type="secondary">该执行器参数由系统自动处理，无需手动填写</Text>;

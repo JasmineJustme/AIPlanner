@@ -13,6 +13,14 @@ from app.utils.timezone import to_utc_naive, utc_now_naive, utc_to_beijing_iso
 
 
 class TodoDiscoveryEngine:
+    def _sanitize_prompt_template(self, template: str | None) -> str:
+        text = template or ""
+        return re.sub(
+            r"\n?# ==== FIXED_JSON_OUTPUT_FORMAT_START \(DO NOT EDIT\) ====\n?[\s\S]*?\n?# ==== FIXED_JSON_OUTPUT_FORMAT_END ====\n?",
+            "\n",
+            text,
+        ).strip()
+
     def _normalize_responsibility_titles(self, value: object) -> list[str]:
         if isinstance(value, str):
             candidates = re.split(r"[,，;；/、\n]+", value)
@@ -257,7 +265,7 @@ class TodoDiscoveryEngine:
             "若无需去重，请返回 {\"dedup_results\": []}。"
         )
         prompt = self._render_prompt_template(
-            llm_cfg.prompt_template or default_prompt,
+            self._sanitize_prompt_template(llm_cfg.prompt_template) or default_prompt,
             {
                 "current_time": utc_to_beijing_iso(dedup_at) or "",
                 "todo_desc": todo_desc,
@@ -400,7 +408,7 @@ class TodoDiscoveryEngine:
             "{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibility\":\"\",\"responsibilities\":[]}]}"
         )
         prompt = self._render_prompt_template(
-            llm_cfg.prompt_template or default_prompt,
+            self._sanitize_prompt_template(llm_cfg.prompt_template) or default_prompt,
             {
                 "current_time": current_time,
                 "datasource_info": datasource_text,
