@@ -5,12 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import ScheduleTask, SchedulePlan, Agent, WAgent, Todo
+from app.utils.timezone import utc_now_naive, utc_to_beijing_iso
 
 router = APIRouter(prefix="/scheduling", tags=["scheduling"])
 
 
 def _now_local_naive() -> datetime:
-    return datetime.now().replace(microsecond=0)
+    return utc_now_naive()
 
 
 def _resolve_task_title(t: ScheduleTask, todo_titles_by_orch: dict[str, list[str]], plan_name: str | None = None, agent_name: str | None = None) -> str:
@@ -43,12 +44,12 @@ def _task_to_dict(
         "wagent_version": t.wagent_version,
         "status": t.status,
         "priority": t.priority,
-        "scheduled_at": t.scheduled_at.isoformat() if t.scheduled_at else None,
-        "original_scheduled_at": t.original_scheduled_at.isoformat() if t.original_scheduled_at else None,
-        "current_scheduled_at": t.current_scheduled_at.isoformat() if t.current_scheduled_at else None,
+        "scheduled_at": utc_to_beijing_iso(t.scheduled_at),
+        "original_scheduled_at": utc_to_beijing_iso(t.original_scheduled_at),
+        "current_scheduled_at": utc_to_beijing_iso(t.current_scheduled_at),
         "delay_count": int(t.delay_count or 0),
-        "started_at": t.started_at.isoformat() if t.started_at else None,
-        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+        "started_at": utc_to_beijing_iso(t.started_at),
+        "completed_at": utc_to_beijing_iso(t.completed_at),
         "input_params": t.input_params,
         "output_result": t.output_result,
         "error_message": t.error_message,
@@ -56,8 +57,8 @@ def _task_to_dict(
         "max_retries": t.max_retries,
         "dependencies": t.dependencies or [],
         "execution_log": t.execution_log,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        "created_at": utc_to_beijing_iso(t.created_at),
+        "updated_at": utc_to_beijing_iso(t.updated_at),
     }
 
 
@@ -74,7 +75,7 @@ async def list_plans(
             "status": p.status,
             "is_recurring": p.is_recurring,
             "recurrence_cron": p.recurrence_cron,
-            "next_run_at": p.next_run_at.isoformat() if p.next_run_at else None,
+            "next_run_at": utc_to_beijing_iso(p.next_run_at),
         }
         for p in items
     ]
@@ -265,8 +266,8 @@ async def get_gantt_data(
             "id": t.id,
             "name": name,
             "task_title": name,
-            "start": start.isoformat() if start else None,
-            "end": end.isoformat() if end else None,
+            "start": utc_to_beijing_iso(start),
+            "end": utc_to_beijing_iso(end),
             "status": t.status,
             "priority": t.priority,
         })
@@ -317,7 +318,7 @@ async def delay_task(
         entry = get_orchestration_entry(task.orchestration_id)
         if entry:
             plan = entry.get("plan") or {}
-            plan["start_time"] = _normalize_plan_time_value(task.current_scheduled_at.isoformat())
+            plan["start_time"] = _normalize_plan_time_value(task.current_scheduled_at.isoformat(), assume_beijing=False)
             entry["plan"] = plan
             _save_store()
 
@@ -325,7 +326,7 @@ async def delay_task(
     return {
         "code": 200,
         "message": "success",
-        "data": {"status": "delayed", "scheduled_at": task.scheduled_at.isoformat()},
+        "data": {"status": "delayed", "scheduled_at": utc_to_beijing_iso(task.scheduled_at)},
     }
 
 

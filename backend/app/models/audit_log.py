@@ -1,10 +1,11 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, JSON, String, func
+from sqlalchemy import DateTime, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.utils.timezone import utc_now_naive
 
 
 class AuditLog(Base):
@@ -20,5 +21,5 @@ class AuditLog(Base):
     ip_address: Mapped[str | None] = mapped_column(String(50), nullable=True)
     user_id: Mapped[str] = mapped_column(String(36), default="default")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=func.now()
+        DateTime, nullable=False, default=utc_now_naive
     )

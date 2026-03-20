@@ -1,6 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer, field_validator
 from datetime import datetime
-from typing import Optional
+from app.utils.timezone import utc_to_beijing_datetime
 
 
 class AuditLogResponse(BaseModel):
@@ -15,3 +15,13 @@ class AuditLogResponse(BaseModel):
     ip_address: str | None = None
     user_id: str
     created_at: datetime
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _convert_utc_to_beijing(cls, value):
+        return utc_to_beijing_datetime(value)
+
+    @field_serializer("created_at")
+    def _serialize_created_at(self, value: datetime):
+        return value.isoformat()
+

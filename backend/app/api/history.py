@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import ExecutionHistory
+from app.utils.timezone import utc_to_beijing_datetime
 
 router = APIRouter(prefix="/history", tags=["history"])
 
@@ -48,8 +49,8 @@ async def list_execution_history(
             "agent_name": h.agent_name,
             "status": h.status,
             "input_params": h.input_params,
-            "started_at": h.started_at,
-            "completed_at": h.completed_at,
+            "started_at": utc_to_beijing_datetime(h.started_at),
+            "completed_at": utc_to_beijing_datetime(h.completed_at),
             "duration_ms": h.duration_ms,
         }
         for h in items
@@ -93,7 +94,7 @@ async def get_history_detail(
             "execution_log": h.execution_log,
             "duration_ms": h.duration_ms,
             "tokens_used": h.tokens_used,
-            "started_at": h.started_at,
-            "completed_at": h.completed_at,
+            "started_at": utc_to_beijing_datetime(h.started_at),
+            "completed_at": utc_to_beijing_datetime(h.completed_at),
         },
     }

@@ -9,11 +9,12 @@ from app.models.execution import ExecutionHistory
 from app.models.schedule import ScheduleTask
 from app.models.wagent import WAgentVersion
 from app.services.dify_client import dify_client
+from app.utils.timezone import utc_now_naive
 from loguru import logger
 
 
 def _now_local_naive() -> datetime:
-    return datetime.now().replace(microsecond=0)
+    return utc_now_naive()
 
 
 class Executor:

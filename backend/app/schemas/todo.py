@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer, field_validator
 from datetime import datetime
 from typing import Optional
+from app.utils.timezone import utc_to_beijing_datetime
 
 
 class TodoCreate(BaseModel):
@@ -61,6 +62,15 @@ class TodoResponse(BaseModel):
     recurrence_count: int = 0
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("due_date", "created_at", "updated_at", mode="before")
+    @classmethod
+    def _convert_utc_to_beijing(cls, value):
+        return utc_to_beijing_datetime(value)
+
+    @field_serializer("due_date", "created_at", "updated_at")
+    def _serialize_datetime(self, value: datetime | None):
+        return value.isoformat() if value else None
 
 
 class TodoReviewConfirm(BaseModel):

@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models import Message
 from pydantic import BaseModel
 from app.schemas.message import MessageResponse
+from app.utils.timezone import beijing_to_utc_naive
 
 
 class BatchMessageIdsBody(BaseModel):
@@ -37,11 +38,11 @@ async def list_messages(
         q = q.where(Message.type == type)
         count_q = count_q.where(Message.type == type)
     if start_date:
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        start_dt = beijing_to_utc_naive(datetime.strptime(start_date, "%Y-%m-%d"))
         q = q.where(Message.created_at >= start_dt)
         count_q = count_q.where(Message.created_at >= start_dt)
     if end_date:
-        end_dt = datetime.strptime(end_date + " 23:59:59", "%Y-%m-%d %H:%M:%S")
+        end_dt = beijing_to_utc_naive(datetime.strptime(end_date + " 23:59:59", "%Y-%m-%d %H:%M:%S"))
         q = q.where(Message.created_at <= end_dt)
         count_q = count_q.where(Message.created_at <= end_dt)
     count_result = await db.execute(count_q)

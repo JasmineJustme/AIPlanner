@@ -8,11 +8,12 @@ from app.models.schedule import SchedulePlan, ScheduleTask
 from app.models.settings import SystemSetting
 from app.engine.executor import executor
 from app.services.sse_manager import sse_manager
+from app.utils.timezone import utc_now_naive
 from loguru import logger
 
 
 def _now_local_naive() -> datetime:
-    return datetime.now().replace(microsecond=0)
+    return utc_now_naive()
 
 
 class SchedulerEngine:

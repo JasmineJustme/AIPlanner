@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy import select, func, or_
@@ -8,6 +8,7 @@ from app.database import get_db
 from app.engine.todo_discovery import todo_discovery_engine
 from app.models import Todo, ScheduleTask
 from app.services.llm_client import LLMServiceError
+from app.utils.timezone import to_utc_naive, utc_now_naive
 from pydantic import BaseModel
 from app.schemas.todo import TodoCreate, TodoUpdate, TodoResponse, TodoReviewConfirm
 
@@ -17,6 +18,14 @@ class BatchIdsBody(BaseModel):
 
 
 router = APIRouter(prefix="/todos", tags=["todos"])
+
+
+def _normalize_todo_time_fields(data: dict) -> dict:
+    normalized = dict(data)
+    for key in ("due_date", "completed_at"):
+        if key in normalized and normalized[key] is not None:
+            normalized[key] = to_utc_naive(normalized[key])
+    return normalized
 
 
 def _normalize_recurrence_fields(data: dict) -> dict:
@@ -44,7 +53,7 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
     )
     items = result.scalars().all()
     changed = False
-    now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    now = utc_now_naive()
 
     orchestration_ids = [todo.orchestration_id for todo in items if todo.orchestration_id]
     latest_completion_by_orch: dict[str, datetime] = {}
@@ -147,7 +156,7 @@ async def create_todo(
     payload: TodoCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    data = _normalize_recurrence_fields(payload.model_dump())
+    data = _normalize_todo_time_fields(_normalize_recurrence_fields(payload.model_dump()))
     todo = Todo(
         title=data["title"],
         description=data.get("description"),
@@ -177,7 +186,7 @@ async def update_todo(
     db: AsyncSession = Depends(get_db),
 ):
     todo = await _get_todo_or_404(todo_id, db)
-    data = payload.model_dump(exclude_unset=True)
+    data = _normalize_todo_time_fields(payload.model_dump(exclude_unset=True))
 
     if "is_recurring" in data:
         data = _normalize_recurrence_fields({
@@ -219,7 +228,7 @@ async def complete_todo(
         raise HTTPException(status_code=400, detail="仅待确认的用户执行任务支持手动完成")
 
     todo.status = "completed"
-    todo.completed_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    todo.completed_at = utc_now_naive()
     todo.orchestration_id = None
     await db.flush()
     await db.refresh(todo)
@@ -336,7 +345,7 @@ async def confirm_review(
     todo.review_status = "confirmed"
     todo.review_reason = None
     if payload:
-        data = payload.model_dump(exclude_unset=True)
+        data = _normalize_todo_time_fields(payload.model_dump(exclude_unset=True))
         for k, v in data.items():
             setattr(todo, k, v)
     await db.flush()

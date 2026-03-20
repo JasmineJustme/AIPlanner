@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime
 import json
 import re
 
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import DataSource, LLMConfig, Responsibility, Todo
 from app.services.datasource_sync import sync_all_datasources
 from app.services.llm_client import llm_client
+from app.utils.timezone import to_utc_naive, utc_now_naive, utc_to_beijing_iso
 
 
 class TodoDiscoveryEngine:
@@ -90,12 +91,7 @@ class TodoDiscoveryEngine:
     def _parse_due_date(self, value: object) -> datetime | None:
         if not value:
             return None
-        if isinstance(value, datetime):
-            return value
-        try:
-            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            return None
+        return to_utc_naive(value)
 
     def _normalize_execution_mode(self, value: object) -> str:
         text = str(value or "").strip().lower()
@@ -215,7 +211,7 @@ class TodoDiscoveryEngine:
         return "\n".join(
             [
                 f"- id={t.id}; title={t.title}; description={t.description or ''}; priority={t.priority or 'medium'}; "
-                f"status={t.status or ''}; due_date={t.due_date.isoformat() if t.due_date else '无'}; project={t.project or ''}"
+                f"status={t.status or ''}; due_date={utc_to_beijing_iso(t.due_date) if t.due_date else '无'}; project={t.project or ''}"
                 for t in todos
             ]
         )
@@ -263,7 +259,7 @@ class TodoDiscoveryEngine:
         prompt = self._render_prompt_template(
             llm_cfg.prompt_template or default_prompt,
             {
-                "current_time": dedup_at.isoformat(),
+                "current_time": utc_to_beijing_iso(dedup_at) or "",
                 "todo_desc": todo_desc,
             },
         )
@@ -282,10 +278,21 @@ class TodoDiscoveryEngine:
                 {"role": "user", "content": prompt},
             ],
         )
-        logger.info("Todo dedup LLM response:\n{}", json.dumps(response, ensure_ascii=False, default=str))
+        parsed_payload = self._extract_json_payload(response.get("content", ""))
+        logger.info(
+            "Todo dedup LLM parsed response:\n{}",
+            json.dumps(
+                {
+                    "usage": response.get("usage", {}),
+                    "parsed": parsed_payload,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
         await llm_client.log_usage(db, "todo_dedup", llm_cfg.model_name or "", response.get("usage", {}))
 
-        payload = self._extract_json_payload(response.get("content", ""))
+        payload = parsed_payload
         results_raw = payload.get("dedup_results") if isinstance(payload, dict) else None
         if not isinstance(results_raw, list):
             legacy = payload.get("duplicates") if isinstance(payload, dict) else None
@@ -382,7 +389,7 @@ class TodoDiscoveryEngine:
         if not llm_cfg:
             raise ValueError("待办梳理 LLM 未配置")
 
-        current_time = datetime.now(UTC).replace(tzinfo=None, microsecond=0).isoformat()
+        current_time = utc_to_beijing_iso(utc_now_naive()) or ""
         default_prompt = (
             "请根据数据源同步信息和工作职责，识别可执行待办。\n\n"
             "当前时间:\n{current_time}\n\n"
@@ -415,10 +422,21 @@ class TodoDiscoveryEngine:
                 {"role": "user", "content": prompt},
             ],
         )
-        logger.info("Todo analysis LLM response:\n{}", json.dumps(response, ensure_ascii=False, default=str))
+        parsed_payload = self._extract_json_payload(response.get("content", ""))
+        logger.info(
+            "Todo analysis LLM parsed response:\n{}",
+            json.dumps(
+                {
+                    "usage": response.get("usage", {}),
+                    "parsed": parsed_payload,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
         await llm_client.log_usage(db, "todo_analysis", llm_cfg.model_name or "", response.get("usage", {}))
 
-        payload = self._extract_json_payload(response.get("content", ""))
+        payload = parsed_payload
         discovered = self._extract_discovered_todos(payload)
 
         prepared_discovered: list[dict] = []
@@ -443,7 +461,7 @@ class TodoDiscoveryEngine:
                 }
             )
 
-        dedup_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        dedup_at = utc_now_naive()
         existing_system_result = await db.execute(
             select(Todo).where(
                 Todo.source == "system",

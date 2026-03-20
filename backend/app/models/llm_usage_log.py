@@ -1,10 +1,11 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Float, Integer, String, func
+from sqlalchemy import DateTime, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.utils.timezone import utc_now_naive
 
 
 class LLMUsageLog(Base):
@@ -20,5 +21,5 @@ class LLMUsageLog(Base):
     estimated_cost: Mapped[float] = mapped_column(Float, default=0.0)
     request_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=func.now()
+        DateTime, nullable=False, default=utc_now_naive
     )

@@ -1,10 +1,11 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Integer, JSON, String, Text, func
+from sqlalchemy import DateTime, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.utils.timezone import utc_now_naive
 
 
 class TaskQueue(Base):
@@ -23,5 +24,5 @@ class TaskQueue(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=func.now()
+        DateTime, nullable=False, default=utc_now_naive
     )

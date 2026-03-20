@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Agent, WAgent, Workflow, Todo
@@ -6,6 +6,7 @@ from app.services.llm_client import llm_client
 from loguru import logger
 import json
 import re
+from app.utils.timezone import to_utc_naive, utc_now_naive, utc_to_beijing_iso
 
 
 class Orchestrator:
@@ -35,9 +36,9 @@ class Orchestrator:
             return self._create_mock_plan(todos, agents, wagents, workflows)
 
         # 4. Build prompt
-        current_time = datetime.now(UTC).replace(tzinfo=None, microsecond=0).isoformat()
+        current_time = utc_to_beijing_iso(utc_now_naive()) or ""
         todo_desc = "\n".join([
-            f"- ID={t.id}; 标题={t.title}; 描述={t.description or ''}; 优先级={t.priority or 'medium'}; 截止时间={t.due_date.isoformat() if t.due_date else '无'}; 标签={json.dumps(t.tags or [], ensure_ascii=False)}; 项目={t.project or '无'}"
+            f"- ID={t.id}; 标题={t.title}; 描述={t.description or ''}; 优先级={t.priority or 'medium'}; 截止时间={utc_to_beijing_iso(t.due_date) if t.due_date else '无'}; 标签={json.dumps(t.tags or [], ensure_ascii=False)}; 项目={t.project or '无'}"
             for t in todos
         ])
         agent_desc = "\n".join([
@@ -115,15 +116,23 @@ JSON 必须包含以下字段：
                 {"role": "system", "content": "你是一个智能任务编排助手，擅长为任务选择执行器并补全 workflow/agent 参数与调度时间。"},
                 {"role": "user", "content": prompt}
             ])
+            parsed_response = self._parse_plan_response(response.get("content", ""))
             logger.info(
-                "Orchestration LLM response for todo_ids={}:\n{}",
+                "Orchestration LLM parsed response for todo_ids={}:\n{}",
                 todo_ids,
-                json.dumps(response, ensure_ascii=False, default=str),
+                json.dumps(
+                    {
+                        "usage": response.get("usage", {}),
+                        "parsed": parsed_response,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
             )
             await llm_client.log_usage(db, "orchestration", llm_config.model_name, response.get("usage", {}))
 
             content = response.get("content", "")
-            plan = self._parse_plan_response(content)
+            plan = parsed_response
             plan = self._normalize_plan(plan, todos, agents, wagents, workflows)
 
             return {
@@ -333,7 +342,7 @@ JSON 必须包含以下字段：
         ]
 
     def _normalize_times(self, start_time, deadline, estimated_duration_minutes, todos):
-        now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        now = utc_now_naive()
         parsed_start = self._parse_iso_datetime(start_time) or now
         due_dates = [t.due_date for t in todos if getattr(t, "due_date", None)]
         earliest_due = min(due_dates) if due_dates else None
@@ -349,12 +358,7 @@ JSON 必须包含以下字段：
     def _parse_iso_datetime(self, value):
         if not value:
             return None
-        if isinstance(value, datetime):
-            return value.replace(microsecond=0)
-        try:
-            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None, microsecond=0)
-        except ValueError:
-            return None
+        return to_utc_naive(value)
 
     def _create_mock_plan(self, todos, agents, wagents, workflows):
         """Create a simple mock plan when LLM is not available"""

@@ -13,6 +13,7 @@ from app.engine.orchestrator import orchestrator
 from app.models import Todo, SchedulePlan, ScheduleTask, Agent, WAgent
 from app.services.schedule_rebalance import rebalance_schedule_tasks
 from app.services.sse_manager import sse_manager
+from app.utils.timezone import beijing_to_utc_naive, parse_datetime_value, utc_now_naive, utc_to_beijing_iso_from_any
 from loguru import logger
 
 router = APIRouter(prefix="/orchestration", tags=["orchestration"])
@@ -22,6 +23,33 @@ _DATA_DIR.mkdir(exist_ok=True)
 _STORE_FILE = _DATA_DIR / "orchestrations.json"
 
 _orchestration_store: dict[str, dict] = {}
+
+_RESPONSE_TIME_KEYS = {
+    "submitted_at",
+    "deadline",
+    "created_at",
+    "updated_at",
+    "start_time",
+    "completed_at",
+    "scheduled_at",
+    "original_scheduled_at",
+    "current_scheduled_at",
+    "next_run_at",
+}
+
+
+def _convert_times_to_beijing(data):
+    if isinstance(data, list):
+        return [_convert_times_to_beijing(item) for item in data]
+    if isinstance(data, dict):
+        converted = {}
+        for key, value in data.items():
+            if key in _RESPONSE_TIME_KEYS:
+                converted[key] = utc_to_beijing_iso_from_any(value)
+            else:
+                converted[key] = _convert_times_to_beijing(value)
+        return converted
+    return data
 
 
 def _prune_cancelled_orchestrations() -> list[str]:
@@ -264,7 +292,7 @@ async def sync_todos_for_orchestration(db: AsyncSession, orch_id: str, entry: di
             if completed_at is None or task.completed_at > completed_at:
                 completed_at = task.completed_at
         if completed_at is None:
-            completed_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+            completed_at = utc_now_naive()
 
     for todo in todos:
         todo.status = todo_status
@@ -274,28 +302,29 @@ async def sync_todos_for_orchestration(db: AsyncSession, orch_id: str, entry: di
     await db.flush()
 
 
-def _normalize_plan_time_value(value: str | None) -> str | None:
+def _normalize_plan_time_value(value: str | datetime | None, assume_beijing: bool = True) -> str | None:
     if not value:
         return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
+    parsed = parse_datetime_value(value)
+    if parsed is None:
         return str(value)
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone().replace(tzinfo=None)
+        normalized = parsed.astimezone(UTC).replace(tzinfo=None, microsecond=0)
+    elif assume_beijing:
+        normalized = beijing_to_utc_naive(parsed)
     else:
-        parsed = parsed.replace(microsecond=0)
-    return parsed.replace(microsecond=0).isoformat()
+        normalized = parsed.replace(microsecond=0)
+    return normalized.isoformat()
 
 
 def _parse_schedule_datetime(value: str | None) -> datetime:
-    normalized = _normalize_plan_time_value(value)
+    normalized = _normalize_plan_time_value(value, assume_beijing=False)
     if not normalized:
-        return datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        return utc_now_naive()
     try:
         return datetime.fromisoformat(normalized).replace(microsecond=0)
     except ValueError:
-        return datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        return utc_now_naive()
 
 
 def _normalize_recurrence_payload(data: dict | None) -> dict:
@@ -358,7 +387,7 @@ async def _cancel_schedule_for_orchestration(db: AsyncSession, orch_id: str) -> 
         return
 
     plan_ids = {task.plan_id for task in schedule_tasks if task.plan_id}
-    now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    now = utc_now_naive()
 
     for task in schedule_tasks:
         task.status = "cancelled"
@@ -502,7 +531,7 @@ async def submit_orchestration(
         raise HTTPException(status_code=400, detail="请至少选择一个待办任务")
 
     orch_id = f"orch-{uuid.uuid4().hex[:8]}"
-    now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    now = utc_now_naive().isoformat()
 
     result = await db.execute(select(Todo).where(Todo.id.in_(payload.todo_ids)))
     todos = result.scalars().all()
@@ -621,7 +650,7 @@ async def list_pending_orchestrations(
         elif plan.get("recommended_name"):
              rec_name = plan.get("recommended_name")
 
-        items.append({
+        item = {
             "orch_id": orch_id,
             "summary": build_orchestration_summary(entry.get("todos", []), entry.get("summary", "未命名任务")),
             "todos_count": len(entry.get("todos", [])),
@@ -629,7 +658,8 @@ async def list_pending_orchestrations(
             "submitted_at": entry.get("submitted_at"),
             "error": entry.get("error"),
             "recommended_name": rec_name,
-        })
+        }
+        items.append(_convert_times_to_beijing(item))
     items.sort(key=lambda x: x.get("submitted_at") or "", reverse=True)
     return {
         "code": 200,
@@ -650,7 +680,7 @@ async def get_orchestration_detail(
     return {
         "code": 200,
         "message": "success",
-        "data": entry,
+        "data": _convert_times_to_beijing(entry),
     }
 
 
@@ -753,7 +783,7 @@ async def modify_agent(
 
     _apply_selected_executor(entry, plan_type, recommended_id, selected_name)
     _save_store()
-    return {"code": 200, "message": "success", "data": entry}
+    return {"code": 200, "message": "success", "data": _convert_times_to_beijing(entry)}
 
 
 @router.patch("/{orch_id}/modify-params")
@@ -784,7 +814,7 @@ async def modify_params(
         plan["recurrence_count"] = payload["recurrence_count"]
     entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
     _save_store()
-    return {"code": 200, "message": "success", "data": entry}
+    return {"code": 200, "message": "success", "data": _convert_times_to_beijing(entry)}
 
 
 @router.post("/{orch_id}/cancel")
