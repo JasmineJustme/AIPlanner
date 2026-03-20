@@ -16,7 +16,7 @@ class LLMServiceError(RuntimeError):
 class LLMClient:
     def __init__(self):
         # Use split timeout phases so connection issues fail fast while generation can still run longer.
-        self._request_timeout = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0)
+        self._request_timeout = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=30.0)
         self._client = httpx.AsyncClient(timeout=self._request_timeout)
 
     def _resolve_chat_endpoint(self, api_endpoint: str | None) -> str:
