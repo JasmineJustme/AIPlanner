@@ -55,7 +55,7 @@ client.interceptors.response.use(
       } else if (status === 500) {
         showErrorToast('服务器内部错误');
       } else {
-        showErrorToast(error.response.data?.message || '请求失败');
+        showErrorToast(error.response.data?.detail || error.response.data?.message || '请求失败');
       }
     } else if (error.code === 'ECONNABORTED') {
       showErrorToast('请求超时，请重试');

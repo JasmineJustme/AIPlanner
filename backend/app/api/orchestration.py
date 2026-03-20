@@ -406,13 +406,36 @@ async def _cancel_schedule_for_orchestration(db: AsyncSession, orch_id: str) -> 
 async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entry: dict) -> None:
     plan_data = entry.get("plan") or {}
     existing_task_result = await db.execute(
-        select(ScheduleTask).where(ScheduleTask.orchestration_id == orch_id)
+        select(ScheduleTask)
+        .where(
+            ScheduleTask.orchestration_id == orch_id,
+            ScheduleTask.status != "cancelled",
+        )
+        .order_by(ScheduleTask.created_at.desc())
     )
-    schedule_task = existing_task_result.scalar_one_or_none()
+    schedule_task = existing_task_result.scalars().first()
 
     schedule_plan = None
     if schedule_task:
         schedule_plan = await db.get(SchedulePlan, schedule_task.plan_id)
+        # A previously cancelled plan should never be reused for a new confirmation.
+        if schedule_plan and schedule_plan.status == "cancelled":
+            schedule_task = None
+            schedule_plan = None
+
+    # Guard against duplicate submissions that would create another schedule plan
+    # for the same orchestration id when historical task records already exist.
+    if schedule_task is None:
+        duplicate_task_result = await db.execute(
+            select(ScheduleTask)
+            .where(
+                ScheduleTask.orchestration_id == orch_id,
+                ScheduleTask.status != "cancelled",
+            )
+            .limit(1)
+        )
+        if duplicate_task_result.scalar_one_or_none() is not None:
+            raise HTTPException(status_code=400, detail="请勿重复提交")
 
     if schedule_plan is None:
         schedule_plan = SchedulePlan(
@@ -488,21 +511,30 @@ def _snapshot_llm_recommendation(entry: dict) -> None:
     plan_type = plan.get("plan_type")
     recommended_id = plan.get("recommended_id")
     recommended_name = plan.get("recommended_name")
+    recommended_input_params = plan.get("input_params")
+
+    def _snapshot_input_params_once() -> None:
+        if "llm_recommended_input_params" in entry:
+            return
+        entry["llm_recommended_input_params"] = dict(recommended_input_params) if isinstance(recommended_input_params, dict) else {}
 
     if suggested_agent and suggested_agent.get("id"):
         entry["llm_recommended_id"] = suggested_agent.get("id")
         entry["llm_recommended_name"] = suggested_agent.get("name") or recommended_name or ""
         entry["llm_recommended_type"] = "agent"
+        _snapshot_input_params_once()
         return
     if suggested_wagent and suggested_wagent.get("id"):
         entry["llm_recommended_id"] = suggested_wagent.get("id")
         entry["llm_recommended_name"] = suggested_wagent.get("name") or recommended_name or ""
         entry["llm_recommended_type"] = "wagent"
+        _snapshot_input_params_once()
         return
     if recommended_id and plan_type in {"agent", "wagent", "new_wagent"}:
         entry["llm_recommended_id"] = recommended_id
         entry["llm_recommended_name"] = recommended_name or ""
         entry["llm_recommended_type"] = "wagent" if plan_type in {"wagent", "new_wagent"} else "agent"
+        _snapshot_input_params_once()
 
 
 def _apply_selected_executor(entry: dict, plan_type: str, recommended_id: str | None, recommended_name: str | None) -> None:
@@ -513,6 +545,42 @@ def _apply_selected_executor(entry: dict, plan_type: str, recommended_id: str | 
     entry["plan"] = plan
     entry["suggested_agent"] = _build_recommended_target("agent", recommended_id, recommended_name) if plan_type == "agent" else None
     entry["suggested_wagent"] = _build_recommended_target("wagent", recommended_id, recommended_name) if plan_type in {"wagent", "new_wagent"} else None
+
+
+def _build_plan_input_params_for_selected_agent(raw_params) -> tuple[dict, list[str]]:
+    editable_keys = orchestrator._extract_user_editable_keys(raw_params)
+    if not editable_keys:
+        return {}, []
+
+    defaults = {key: "" for key in editable_keys}
+    if isinstance(raw_params, list):
+        for item in raw_params:
+            if hasattr(item, "model_dump"):
+                item = item.model_dump()
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("key") or item.get("field")
+            if not name or str(name) not in defaults:
+                continue
+            if item.get("default") is not None:
+                defaults[str(name)] = item.get("default")
+            elif item.get("value") is not None:
+                defaults[str(name)] = item.get("value")
+        return defaults, editable_keys
+
+    if isinstance(raw_params, dict):
+        for key in editable_keys:
+            value = raw_params.get(key)
+            if isinstance(value, dict):
+                if value.get("default") is not None:
+                    defaults[key] = value.get("default")
+                elif value.get("value") is not None:
+                    defaults[key] = value.get("value")
+            elif value is not None:
+                defaults[key] = value
+        return defaults, editable_keys
+
+    return defaults, editable_keys
 
 
 def _mark_analysis_error(entry: dict, error: str) -> str:
@@ -693,7 +761,7 @@ async def confirm_orchestration(
     entry = _orchestration_store.get(orch_id)
     if not entry:
         raise HTTPException(status_code=404, detail="编排不存在")
-    entry["status"] = "confirmed"
+    previous_status = entry.get("status", "pending_confirm")
     if payload:
         plan = entry.get("plan") or {}
         plan["input_params"] = payload.get("input_params", plan.get("input_params"))
@@ -710,12 +778,17 @@ async def confirm_orchestration(
         entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
     else:
         entry["plan"] = _apply_recurrence_to_plan(entry.get("plan"), _normalize_recurrence_payload(entry.get("plan") or {}))
-    await ensure_schedule_for_orchestration(db, orch_id, entry)
-    await rebalance_schedule_tasks(db)
-    await _sync_todo_recurrence_for_orchestration(db, entry)
-    await sync_todos_for_orchestration(db, orch_id, entry)
-    _save_store()
-    return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
+    try:
+        await ensure_schedule_for_orchestration(db, orch_id, entry)
+        await rebalance_schedule_tasks(db)
+        await _sync_todo_recurrence_for_orchestration(db, entry)
+        entry["status"] = "confirmed"
+        await sync_todos_for_orchestration(db, orch_id, entry)
+        _save_store()
+        return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
+    except Exception:
+        entry["status"] = previous_status
+        raise
 
 
 @router.post("/{orch_id}/confirm-wagent")
@@ -727,7 +800,7 @@ async def confirm_wagent(
     entry = _orchestration_store.get(orch_id)
     if not entry:
         raise HTTPException(status_code=404, detail="编排不存在")
-    entry["status"] = "confirmed"
+    previous_status = entry.get("status", "pending_confirm")
     if payload:
         plan = entry.get("plan") or {}
         plan["input_params"] = payload.get("input_params", plan.get("input_params"))
@@ -744,12 +817,17 @@ async def confirm_wagent(
         entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
     else:
         entry["plan"] = _apply_recurrence_to_plan(entry.get("plan"), _normalize_recurrence_payload(entry.get("plan") or {}))
-    await ensure_schedule_for_orchestration(db, orch_id, entry)
-    await rebalance_schedule_tasks(db)
-    await _sync_todo_recurrence_for_orchestration(db, entry)
-    await sync_todos_for_orchestration(db, orch_id, entry)
-    _save_store()
-    return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
+    try:
+        await ensure_schedule_for_orchestration(db, orch_id, entry)
+        await rebalance_schedule_tasks(db)
+        await _sync_todo_recurrence_for_orchestration(db, entry)
+        entry["status"] = "confirmed"
+        await sync_todos_for_orchestration(db, orch_id, entry)
+        _save_store()
+        return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
+    except Exception:
+        entry["status"] = previous_status
+        raise
 
 
 @router.patch("/{orch_id}/modify-agent")
@@ -782,6 +860,27 @@ async def modify_agent(
         raise HTTPException(status_code=400, detail="不支持的执行器类型")
 
     _apply_selected_executor(entry, plan_type, recommended_id, selected_name)
+    if plan_type == "agent":
+        plan = entry.get("plan") or {}
+        raw_schema = getattr(target, "input_params", {}) if target else {}
+        rebuilt_params, editable_keys = _build_plan_input_params_for_selected_agent(raw_schema or {})
+        if (
+            recommended_id
+            and recommended_id == entry.get("llm_recommended_id")
+            and entry.get("llm_recommended_type") == "agent"
+        ):
+            llm_snapshot_params = entry.get("llm_recommended_input_params")
+            if isinstance(llm_snapshot_params, dict) and llm_snapshot_params:
+                if not editable_keys:
+                    editable_keys = list(llm_snapshot_params.keys())
+                    rebuilt_params = {key: llm_snapshot_params.get(key) for key in editable_keys}
+                else:
+                    for key in editable_keys:
+                        if key in llm_snapshot_params:
+                            rebuilt_params[key] = llm_snapshot_params[key]
+        plan["editable_input_keys"] = editable_keys
+        plan["input_params"] = rebuilt_params
+        entry["plan"] = plan
     _save_store()
     return {"code": 200, "message": "success", "data": _convert_times_to_beijing(entry)}
 

@@ -211,9 +211,27 @@ async def cancel_plan(
     plan = await db.get(SchedulePlan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
-    plan.status = "cancelled"
+
+    task_result = await db.execute(select(ScheduleTask).where(ScheduleTask.plan_id == plan_id))
+    plan_tasks = task_result.scalars().all()
+    orchestration_ids = {task.orchestration_id for task in plan_tasks if task.orchestration_id}
+
+    if orchestration_ids:
+        from app.api.orchestration import get_orchestration_entry, sync_todos_for_orchestration, update_orchestration_status
+
+        for orch_id in orchestration_ids:
+            if update_orchestration_status(orch_id, "pending_confirm"):
+                entry = get_orchestration_entry(orch_id)
+                if entry:
+                    await sync_todos_for_orchestration(db, orch_id, entry)
+
+    for task in plan_tasks:
+        await db.delete(task)
     await db.flush()
-    return {"code": 200, "message": "success", "data": {"status": "cancelled"}}
+
+    await db.delete(plan)
+    await db.flush()
+    return {"code": 200, "message": "success", "data": {"status": "cancelled", "removed": True}}
 
 
 @router.get("/gantt")
@@ -359,18 +377,12 @@ async def cancel_task(
 
     # Update associated items if possible
     if task.orchestration_id:
-        from app.api.orchestration import update_orchestration_status
-        # Revert orchestration to pending_confirm
-        update_orchestration_status(task.orchestration_id, "pending_confirm")
+        from app.api.orchestration import get_orchestration_entry, sync_todos_for_orchestration, update_orchestration_status
 
-        # Also find related Todos and update them to pending_confirm?
-        # Todos have orchestration_id. Update all todos with this orchestration_id.
-        from app.models import Todo
-        result = await db.execute(select(Todo).where(Todo.orchestration_id == task.orchestration_id))
-        todos = result.scalars().all()
-        for t in todos:
-            # status "pending_confirm" to match orchestration status
-            t.status = "pending_confirm"
+        if update_orchestration_status(task.orchestration_id, "pending_confirm"):
+            entry = get_orchestration_entry(task.orchestration_id)
+            if entry:
+                await sync_todos_for_orchestration(db, task.orchestration_id, entry)
 
     await db.flush()
     return {"code": 200, "message": "success", "data": {"status": "cancelled"}}
