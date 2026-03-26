@@ -12,6 +12,7 @@ import {
   message,
   Pagination,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Table,
@@ -19,7 +20,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { PlusOutlined, QuestionCircleOutlined, RedoOutlined, UploadOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, PlusOutlined, QuestionCircleOutlined, RedoOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import { useLocation } from 'react-router-dom';
@@ -39,7 +40,6 @@ import type { Todo } from '@/types/todo';
 import PriorityTag from '@/components/PriorityTag';
 import SourceTag from '@/components/SourceTag';
 import { formatDate } from '@/utils/format';
-import { parseExcelFile } from '@/utils/excel';
 import {
   PRIORITY_MAP,
   SOURCE_MAP,
@@ -80,7 +80,6 @@ export default function TodosPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [saving, setSaving] = useState(false);
-  const [importLoading, setImportLoading] = useState(false);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
@@ -241,46 +240,6 @@ export default function TodosPage() {
     } catch {
       message.error('删除失败');
     }
-  };
-
-  const handleBatchImport = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.xlsx,.xls';
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      setImportLoading(true);
-      try {
-        const rows = await parseExcelFile(file);
-        const toCreate = rows
-          .filter((r: Record<string, unknown>) => r['标题'] || r['title'])
-          .map((r: Record<string, unknown>) => ({
-            title: String(r['标题'] ?? r['title'] ?? ''),
-            description: r['描述'] || r['description'] ? String(r['描述'] ?? r['description']) : undefined,
-            priority: (r['优先级'] ?? r['priority'] ?? 'medium') as string,
-            execution_mode: TodoExecutionMode.System,
-            project: r['项目'] || r['project'] ? String(r['项目'] ?? r['project']) : undefined,
-            tags: typeof r['标签'] === 'string' ? (r['标签'] as string).split(/[,，]/).map((s) => s.trim()).filter(Boolean) : [],
-          }));
-        let imported = 0;
-        for (const item of toCreate) {
-          try {
-            await createTodo(item);
-            imported++;
-          } catch {
-            // skip failed
-          }
-        }
-        message.success(`成功导入 ${imported} 条`);
-        loadTodos();
-      } catch {
-        message.error('导入失败');
-      } finally {
-        setImportLoading(false);
-      }
-    };
-    input.click();
   };
 
   const handleConfirmTask = async (record: Todo) => {
@@ -688,17 +647,14 @@ export default function TodosPage() {
           <Button onClick={handleSmartDiscover} loading={discovering}>
             智能发掘待办
           </Button>
-          <Button icon={<UploadOutlined />} onClick={handleBatchImport} loading={importLoading}>
-            批量导入
-          </Button>
-          <Space>
-            <Button type={viewMode === 'list' ? 'primary' : 'default'} onClick={() => setViewMode('list')}>
-              列表
-            </Button>
-            <Button type={viewMode === 'board' ? 'primary' : 'default'} onClick={() => setViewMode('board')}>
-              看板
-            </Button>
-          </Space>
+          <Segmented
+            value={viewMode}
+            onChange={(v) => setViewMode(v as 'list' | 'board')}
+            options={[
+              { value: 'list', icon: <UnorderedListOutlined />, label: '列表' },
+              { value: 'board', icon: <AppstoreOutlined />, label: '看板' },
+            ]}
+          />
         </Space>
       </div>
 
@@ -746,7 +702,7 @@ export default function TodosPage() {
             <Alert
               type="info"
               showIcon
-              message="暂无待办记录，可通过新建、批量导入或智能发掘生成任务。"
+              message="暂无待办记录，可通过新建或智能发掘生成任务。"
               style={{ marginBottom: 16 }}
             />
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>

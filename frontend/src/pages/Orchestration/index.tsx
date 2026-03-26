@@ -918,9 +918,8 @@ export default function OrchestrationPage() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>智能编排</Title>
-        <Button onClick={loadPending}>刷新</Button>
       </div>
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={items} />
     </div>

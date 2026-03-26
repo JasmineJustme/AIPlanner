@@ -173,7 +173,6 @@ export default function AppLayout() {
         task={confirmModal.task}
         onConfirm={confirmModal.onConfirm}
         onDelay={confirmModal.onDelay}
-        onSkip={confirmModal.onSkip}
         onCancel={confirmModal.onCancel}
         onClose={confirmModal.onClose}
       />

@@ -14,7 +14,6 @@ import {
   getNextTask,
   getDashboardTrend,
   getAgentRanking,
-  getSyncStatus,
 } from '@/api/dashboard';
 import { ROUTES } from '@/constants/routes';
 
@@ -45,13 +44,6 @@ interface AgentRankItem {
   count?: number;
 }
 
-interface SyncStatusItem {
-  id?: string;
-  name?: string;
-  last_sync?: string;
-  status?: 'success' | 'failed' | 'syncing';
-}
-
 function extractData<T>(res: unknown): T | null {
   const data = (res as { data?: { data?: T; code?: number } })?.data;
   if (!data || typeof data !== 'object') return null;
@@ -67,13 +59,11 @@ export default function DashboardPage() {
   const [nextTaskLoading, setNextTaskLoading] = useState(true);
   const [trendLoading, setTrendLoading] = useState(true);
   const [rankingLoading, setRankingLoading] = useState(true);
-  const [syncLoading, setSyncLoading] = useState(true);
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [nextTask, setNextTask] = useState<NextTask | null>(null);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [ranking, setRanking] = useState<AgentRankItem[]>([]);
-  const [syncStatus, setSyncStatus] = useState<SyncStatusItem[]>([]);
   const [countdown, setCountdown] = useState<number | null>(null);
 
   useEffect(() => {
@@ -146,23 +136,6 @@ export default function DashboardPage() {
         setRanking([]);
       } finally {
         setRankingLoading(false);
-      }
-    };
-    load();
-  }, []);
-
-  useEffect(() => {
-    const load = async () => {
-      setSyncLoading(true);
-      try {
-        const res = await getSyncStatus();
-        const data = extractData<{ items?: SyncStatusItem[]; data?: SyncStatusItem[] }>(res);
-        const items = data?.items ?? data?.data ?? (Array.isArray(data) ? data : []);
-        setSyncStatus(Array.isArray(items) ? items : []);
-      } catch {
-        setSyncStatus([]);
-      } finally {
-        setSyncLoading(false);
       }
     };
     load();
@@ -323,39 +296,6 @@ export default function DashboardPage() {
         </Col>
       </Row>
 
-      {/* Fourth row: 数据源同步状态 */}
-      <Row gutter={[16, 16]}>
-        <Col span={24}>
-          <Typography.Title level={5} style={{ marginBottom: 12 }}>
-            数据源同步状态
-          </Typography.Title>
-        </Col>
-        {syncLoading ? (
-          <Col span={24}>
-            <Skeleton active paragraph={{ rows: 1 }} />
-          </Col>
-        ) : syncStatus.length > 0 ? (
-          syncStatus.map((s) => (
-            <Col key={s.id ?? s.name ?? ''} xs={24} sm={12} md={8}>
-              <Card size="small" title={s.name ?? '数据源'}>
-                <Typography.Text type="secondary">
-                  上次同步: {s.last_sync ?? '-'}
-                </Typography.Text>
-                <br />
-                <Typography.Text
-                  type={s.status === 'success' ? 'success' : s.status === 'failed' ? 'danger' : undefined}
-                >
-                  {s.status === 'success' ? '成功' : s.status === 'failed' ? '失败' : '同步中'}
-                </Typography.Text>
-              </Card>
-            </Col>
-          ))
-        ) : (
-          <Col span={24}>
-            <Typography.Text type="secondary">暂无数据源</Typography.Text>
-          </Col>
-        )}
-      </Row>
     </div>
   );
 }

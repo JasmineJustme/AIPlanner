@@ -348,19 +348,35 @@ async def delay_task(
     }
 
 
-@router.post("/tasks/{task_id}/skip")
-async def skip_task(
+@router.post("/tasks/{task_id}/run-now")
+async def run_now_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     task = await db.get(ScheduleTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    task.status = "skipped"
-    task.confirm_action = "skipped"
+    if task.status not in ("pending", "confirming"):
+        raise HTTPException(status_code=400, detail=f"Cannot run task in '{task.status}' status")
+
+    now = _now_local_naive()
+    if task.original_scheduled_at is None:
+        task.original_scheduled_at = task.scheduled_at
+    task.current_scheduled_at = now
+    task.scheduled_at = now
+    task.status = "pending"
+    task.confirm_action = "run_now"
     task.confirm_deadline = None
     await db.flush()
-    return {"code": 200, "message": "success", "data": {"status": "skipped"}}
+
+    from app.services.sse_manager import sse_manager
+    await sse_manager.broadcast("task.status_changed", {"task_id": task.id, "status": "pending"})
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {"status": "pending", "scheduled_at": utc_to_beijing_iso(task.scheduled_at)},
+    }
 
 
 @router.post("/tasks/{task_id}/cancel")

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { sseManager } from '@/api/sse';
-import { confirmExecute, delayTask, skipTask, cancelTask } from '@/api/scheduling';
+import { confirmExecute, delayTask, cancelTask } from '@/api/scheduling';
 import type { ConfirmTaskInfo } from '@/components/ConfirmModal';
 
 export function useConfirmModal() {
@@ -34,10 +34,6 @@ export function useConfirmModal() {
     await delayTask(taskId, { minutes });
   }, []);
 
-  const handleSkip = useCallback(async (taskId: string) => {
-    await skipTask(taskId);
-  }, []);
-
   const handleCancel = useCallback(async (taskId: string) => {
     await cancelTask(taskId);
   }, []);
@@ -52,7 +48,6 @@ export function useConfirmModal() {
     task,
     onConfirm: handleConfirm,
     onDelay: handleDelay,
-    onSkip: handleSkip,
     onCancel: handleCancel,
     onClose: handleClose,
   };

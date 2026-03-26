@@ -26,8 +26,8 @@ export const confirmExecute = (taskId: string) =>
 export const delayTask = (taskId: string, data?: { minutes?: number }) =>
   client.post(`/scheduling/tasks/${taskId}/delay`, data ?? { minutes: 30 });
 
-export const skipTask = (taskId: string) =>
-  client.post(`/scheduling/tasks/${taskId}/skip`);
+export const runNowTask = (taskId: string) =>
+  client.post(`/scheduling/tasks/${taskId}/run-now`);
 
 export const cancelTask = (taskId: string) =>
   client.post(`/scheduling/tasks/${taskId}/cancel`);

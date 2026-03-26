@@ -15,7 +15,7 @@ import {
   PlayCircleOutlined,
   ReloadOutlined,
   CloseOutlined,
-  ForwardOutlined,
+  ThunderboltOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons';
 import { gantt } from 'dhtmlx-gantt';
@@ -25,7 +25,7 @@ import {
   getGanttData,
   getSchedulePlans,
   retryTask,
-  skipTask,
+  runNowTask,
   cancelTask,
   pauseTask,
   resumeTask,
@@ -260,10 +260,10 @@ export default function SchedulingPage() {
     }
   };
 
-  const handleSkipTask = async (taskId: string) => {
+  const handleRunNowTask = async (taskId: string) => {
     try {
-      await skipTask(taskId);
-      message.success('已跳过');
+      await runNowTask(taskId);
+      message.success('已加入立即执行队列');
       loadTasks();
       loadGantt();
     } catch {
@@ -324,7 +324,7 @@ export default function SchedulingPage() {
       render: (_: unknown, r: ScheduleTask) => getTaskDisplayName(r),
     },
     {
-      title: 'Agent/W-Agent',
+      title: 'Agent',
       dataIndex: 'agent_name',
       key: 'agent_name',
       render: (v: string, r: ScheduleTask) => v || (r.wagent_id ? 'W-Agent' : '-'),
@@ -367,7 +367,7 @@ export default function SchedulingPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 220,
+      width: 260,
       render: (_: unknown, r: ScheduleTask) => {
         const isTerminalFailed = r.status === 'failed' && (r.retry_count ?? 0) >= (r.max_retries ?? 3);
         return (
@@ -386,9 +386,11 @@ export default function SchedulingPage() {
             )}
             {(r.status === 'pending' || r.status === 'confirming') && (
               <>
-                <Button type="link" size="small" icon={<ForwardOutlined />} onClick={() => handleSkipTask(r.id)}>
-                  跳过
-                </Button>
+                <Popconfirm title="确定立即执行？" onConfirm={() => handleRunNowTask(r.id)}>
+                  <Button type="link" size="small" icon={<ThunderboltOutlined />}>
+                    立即执行
+                  </Button>
+                </Popconfirm>
                 <Popconfirm title="确定取消？" onConfirm={() => handleCancelTask(r.id)}>
                   <Button type="link" size="small" danger icon={<CloseOutlined />}>
                     取消

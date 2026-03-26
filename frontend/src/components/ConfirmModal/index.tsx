@@ -14,7 +14,6 @@ interface ConfirmModalProps {
   task: ConfirmTaskInfo | null;
   onConfirm: (taskId: string) => void;
   onDelay: (taskId: string, minutes: number) => void;
-  onSkip: (taskId: string) => void;
   onCancel: (taskId: string) => void;
   onClose: () => void;
 }
@@ -24,7 +23,6 @@ export default function ConfirmModal({
   task,
   onConfirm,
   onDelay,
-  onSkip,
   onCancel,
   onClose,
 }: ConfirmModalProps) {
@@ -45,11 +43,6 @@ export default function ConfirmModal({
 
   const handleDelay = () => {
     onDelay(task.id, delayMinutes);
-    onClose();
-  };
-
-  const handleSkip = () => {
-    onSkip(task.id);
     onClose();
   };
 
@@ -96,7 +89,6 @@ export default function ConfirmModal({
           />
           <Button onClick={handleDelay}>延后执行</Button>
         </Space>
-        <Button onClick={handleSkip}>跳过</Button>
         <Button onClick={handleCancel}>取消</Button>
       </Space>
     </Modal>
