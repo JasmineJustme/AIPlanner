@@ -5,8 +5,11 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.config import settings
 from app.models.llm_config import LLMConfig
 from app.models.llm_usage_log import LLMUsageLog
+
+_THINK_TAG_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
 class LLMServiceError(RuntimeError):
@@ -14,10 +17,15 @@ class LLMServiceError(RuntimeError):
 
 
 class LLMClient:
+    DEFAULT_READ_TIMEOUT = 180.0
+
     def __init__(self):
-        # Use split timeout phases so connection issues fail fast while generation can still run longer.
-        self._request_timeout = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=30.0)
-        self._client = httpx.AsyncClient(timeout=self._request_timeout)
+        self._request_timeout = httpx.Timeout(connect=15.0, read=self.DEFAULT_READ_TIMEOUT, write=30.0, pool=30.0)
+        self._client = httpx.AsyncClient(timeout=self._request_timeout, verify=settings.SSL_VERIFY)
+
+    def _build_timeout(self, read_timeout: float | None = None) -> httpx.Timeout:
+        read_sec = read_timeout if read_timeout and read_timeout > 0 else self.DEFAULT_READ_TIMEOUT
+        return httpx.Timeout(connect=15.0, read=read_sec, write=30.0, pool=30.0)
 
     def _resolve_chat_endpoint(self, api_endpoint: str | None) -> str:
         endpoint = (api_endpoint or "").strip()
@@ -37,7 +45,54 @@ class LLMClient:
         normalized_path = f"{path}/chat/completions" if path else "/chat/completions"
         return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, parsed.query, parsed.fragment))
 
-    async def _post_with_retry(self, endpoint: str, payload: dict, headers: dict, provider: str, model_name: str):
+    @staticmethod
+    def _extract_thinking(content: str) -> tuple[str, str]:
+        """Separate inline <think>...</think> blocks from the actual content.
+
+        Returns (clean_content, thinking_text).
+        """
+        thinking_parts: list[str] = []
+        clean = content
+
+        for m in _THINK_TAG_RE.finditer(content):
+            thinking_parts.append(m.group(1).strip())
+
+        if thinking_parts:
+            clean = _THINK_TAG_RE.sub("", content).strip()
+
+        return clean, "\n\n".join(thinking_parts)
+
+    @staticmethod
+    def _extract_message_fields(result: dict) -> dict:
+        """Extract content, reasoning, and usage from an OpenAI-compatible response.
+
+        Handles three scenarios:
+        1. Standard response — content only in message.content
+        2. Dedicated reasoning field — message.reasoning_content (DeepSeek-R1 style)
+        3. Inline <think> tags — <think>...</think> embedded in message.content
+        """
+        message = result.get("choices", [{}])[0].get("message", {})
+        raw_content = message.get("content") or ""
+        usage = result.get("usage", {})
+
+        reasoning_content = (
+            message.get("reasoning_content")
+            or message.get("reasoning")
+            or ""
+        )
+
+        clean_content, inline_thinking = LLMClient._extract_thinking(raw_content)
+
+        if not reasoning_content and inline_thinking:
+            reasoning_content = inline_thinking
+
+        return {
+            "content": clean_content,
+            "reasoning_content": reasoning_content,
+            "usage": usage,
+        }
+
+    async def _post_with_retry(self, endpoint: str, payload: dict, headers: dict, provider: str, model_name: str, timeout: httpx.Timeout | None = None):
         max_attempts = 3
         retryable_network_errors = (
             httpx.ConnectError,
@@ -51,7 +106,7 @@ class LLMClient:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                response = await self._client.post(endpoint, json=payload, headers=headers)
+                response = await self._client.post(endpoint, json=payload, headers=headers, timeout=timeout)
                 response.raise_for_status()
                 return response
             except httpx.HTTPStatusError as exc:
@@ -79,7 +134,13 @@ class LLMClient:
                 raise LLMServiceError(f"LLM call failed ({provider}/{model_name}): {exc}") from exc
 
     async def chat(self, config: LLMConfig, messages: list[dict]) -> dict:
-        """Send chat request to LLM based on provider config"""
+        """Send chat request to LLM based on provider config.
+
+        Returns dict with keys:
+          - content: the actual answer (thinking/reasoning stripped)
+          - reasoning_content: model's chain-of-thought if present (empty string otherwise)
+          - usage: token usage dict
+        """
         endpoint = self._resolve_chat_endpoint(config.api_endpoint)
         if endpoint != (config.api_endpoint or "").strip():
             logger.info("Normalized LLM endpoint from '{}' to '{}'", config.api_endpoint, endpoint)
@@ -98,6 +159,8 @@ class LLMClient:
             payload["temperature"] = config.temperature
         if prefs.get("top_p_enabled", True):
             payload["top_p"] = config.top_p
+        config_timeout = getattr(config, "timeout", None)
+        request_timeout = self._build_timeout(float(config_timeout)) if config_timeout else None
         try:
             response = await self._post_with_retry(
                 endpoint=endpoint,
@@ -105,12 +168,20 @@ class LLMClient:
                 headers=headers,
                 provider=config.provider or "unknown",
                 model_name=config.model_name or "unknown",
+                timeout=request_timeout,
             )
             result = response.json()
-            return {
-                "content": result.get("choices", [{}])[0].get("message", {}).get("content", ""),
-                "usage": result.get("usage", {}),
-            }
+            extracted = self._extract_message_fields(result)
+
+            if extracted["reasoning_content"]:
+                logger.debug(
+                    "LLM reasoning detected ({}/{}): {}…",
+                    config.provider,
+                    config.model_name,
+                    extracted["reasoning_content"][:200],
+                )
+
+            return extracted
         except LLMServiceError:
             raise
         except Exception as e:

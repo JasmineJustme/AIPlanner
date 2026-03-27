@@ -1,0 +1,230 @@
+{
+  "captured_at": "2026-03-10T16:34:52.570401",
+  "todo": [
+    {
+      "title": "推送工作报告",
+      "description": "每周5下午3点向全行室经理推送该室这周的工作报告总结",
+      "status": "scheduling",
+      "priority": "medium",
+      "source": "manual",
+      "source_ref": null,
+      "due_date": null,
+      "tags": "[]",
+      "project": null,
+      "review_status": null,
+      "review_reason": null,
+      "duplicate_of": null,
+      "orchestration_id": "orch-9b34710c",
+      "id": "a4abeecf-129f-4801-8568-6e453ff3bf06",
+      "created_at": "2026-03-10 02:26:08",
+      "updated_at": "2026-03-10 07:45:28",
+      "user_id": "default",
+      "execution_mode": "user"
+    }
+  ],
+  "orchestrations": {
+    "orch-c2cdf77a": {
+      "orch_id": "orch-c2cdf77a",
+      "summary": "推送工作报告",
+      "status": "cancelled",
+      "submitted_at": "2026-03-10T02:26:47.963789",
+      "todos": [
+        {
+          "id": "a4abeecf-129f-4801-8568-6e453ff3bf06",
+          "title": "推送工作报告",
+          "description": "每周5下午3点向全行室经理推送该室这周的工作报告总结",
+          "source": "manual",
+          "priority": "medium",
+          "status": "pending",
+          "deadline": null,
+          "created_at": "2026-03-10T02:26:08",
+          "updated_at": "2026-03-10T02:26:08"
+        }
+      ],
+      "suggested_agent": null,
+      "suggested_wagent": {
+        "id": "e93237ef-a339-4987-9cd5-4be191780e74",
+        "name": "1",
+        "is_enabled": true
+      },
+      "plan": {
+        "plan_type": "wagent",
+        "recommended_id": "e93237ef-a339-4987-9cd5-4be191780e74",
+        "recommended_name": "1",
+        "reason": "W-Agent '1' 可以用来触发后续的 Workflow 执行，但描述为空，可能需要进一步配置。",
+        "input_params": {},
+        "priority": "medium",
+        "estimated_duration_minutes": 30,
+        "start_time": "2026-03-10T15:00:00",
+        "deadline": "2026-03-10T15:30:00",
+        "steps": [
+          {
+            "order": 1,
+            "workflow_name": "获得当前的年月日"
+          }
+        ]
+      },
+      "llm_reason": "W-Agent '1' 可以用来触发后续的 Workflow 执行，但描述为空，可能需要进一步配置。",
+      "error": null
+    },
+    "orch-c3a786eb": {
+      "orch_id": "orch-c3a786eb",
+      "summary": "推送工作报告",
+      "status": "cancelled",
+      "submitted_at": "2026-03-10T02:30:43.216661",
+      "todos": [
+        {
+          "id": "a4abeecf-129f-4801-8568-6e453ff3bf06",
+          "title": "推送工作报告",
+          "description": "每周5下午3点向全行室经理推送该室这周的工作报告总结",
+          "source": "manual",
+          "priority": "medium",
+          "status": "pending_confirm",
+          "deadline": null,
+          "created_at": "2026-03-10T02:26:08",
+          "updated_at": "2026-03-10T02:30:37"
+        }
+      ],
+      "suggested_agent": {
+        "id": "100e8c5d-d2a2-4b5f-a2dc-e74c4bf27a33",
+        "name": "发送信息给指定联系人",
+        "is_enabled": true
+      },
+      "suggested_wagent": null,
+      "plan": {
+        "plan_type": "agent",
+        "recommended_id": "100e8c5d-d2a2-4b5f-a2dc-e74c4bf27a33",
+        "recommended_name": "发送信息给指定联系人",
+        "reason": "任务需要向室经理推送工作报告，使用发送信息给指定联系人的 Agent 可以实现这一目的。",
+        "input_params": {
+          "account": "all_manager_accounts",
+          "context": "请查收本周的工作报告总结"
+        },
+        "priority": "medium",
+        "estimated_duration_minutes": 5,
+        "start_time": "2026-03-10T15:00:00",
+        "deadline": "2026-03-10T15:05:00",
+        "steps": []
+      },
+      "llm_reason": "任务需要向室经理推送工作报告，使用发送信息给指定联系人的 Agent 可以实现这一目的。",
+      "error": null
+    },
+    "orch-9b34710c": {
+      "orch_id": "orch-9b34710c",
+      "summary": "推送工作报告",
+      "status": "confirmed",
+      "submitted_at": "2026-03-10T06:39:24.266872",
+      "todos": [
+        {
+          "id": "a4abeecf-129f-4801-8568-6e453ff3bf06",
+          "title": "推送工作报告",
+          "description": "每周5下午3点向全行室经理推送该室这周的工作报告总结",
+          "source": "manual",
+          "priority": "medium",
+          "status": "pending_confirm",
+          "deadline": null,
+          "created_at": "2026-03-10T02:26:08",
+          "updated_at": "2026-03-10T06:39:19"
+        }
+      ],
+      "suggested_agent": {
+        "id": "100e8c5d-d2a2-4b5f-a2dc-e74c4bf27a33",
+        "name": "发送信息给指定联系人",
+        "is_enabled": true
+      },
+      "suggested_wagent": null,
+      "plan": {
+        "plan_type": "agent",
+        "recommended_id": "100e8c5d-d2a2-4b5f-a2dc-e74c4bf27a33",
+        "recommended_name": "发送信息给指定联系人",
+        "reason": "任务需要向指定联系人发送信息，该Agent可以直接完成这个任务。",
+        "input_params": {},
+        "priority": "medium",
+        "estimated_duration_minutes": 5,
+        "start_time": "2026-03-10T14:41:00",
+        "deadline": "2026-03-10T15:05:00",
+        "steps": []
+      },
+      "llm_reason": "任务需要向指定联系人发送信息，该Agent可以直接完成这个任务。",
+      "error": null
+    }
+  },
+  "schedule_tasks": [
+    {
+      "plan_id": "98851645-9770-4885-9f3f-2504b2fa66dd",
+      "orchestration_id": "orch-c3a786eb",
+      "agent_id": "100e8c5d-d2a2-4b5f-a2dc-e74c4bf27a33",
+      "wagent_id": null,
+      "wagent_version": null,
+      "status": "cancelled",
+      "priority": "medium",
+      "scheduled_at": "2026-03-10 15:00:00.000000",
+      "started_at": "2026-03-10 12:44:56.000000",
+      "completed_at": "2026-03-10 12:44:57.000000",
+      "input_params": "{\"account\": \"all_manager_accounts\", \"context\": \"\\u8bf7\\u67e5\\u6536\\u672c\\u5468\\u7684\\u5de5\\u4f5c\\u62a5\\u544a\\u603b\\u7ed3\"}",
+      "output_result": null,
+      "error_message": null,
+      "retry_count": 0,
+      "max_retries": 3,
+      "dependencies": "[]",
+      "confirm_deadline": null,
+      "confirm_action": "cancelled",
+      "execution_log": null,
+      "id": "0192113d-4436-4cd0-89f2-2cd40d787aa9",
+      "created_at": "2026-03-10 02:31:27",
+      "updated_at": "2026-03-10 06:39:13",
+      "user_id": "default"
+    },
+    {
+      "plan_id": "5290adcf-de26-49b2-b648-d20200e77444",
+      "orchestration_id": "orch-9b34710c",
+      "agent_id": "100e8c5d-d2a2-4b5f-a2dc-e74c4bf27a33",
+      "wagent_id": null,
+      "wagent_version": null,
+      "status": "completed",
+      "priority": "medium",
+      "scheduled_at": "2026-03-10 14:41:00.000000",
+      "started_at": "2026-03-10 14:51:21.000000",
+      "completed_at": "2026-03-10 15:46:17.000000",
+      "input_params": "{}",
+      "output_result": "{\"task_id\": \"32c24615-0f04-483c-874b-fa93f1e8e6a2\", \"workflow_run_id\": \"0c8bc7e1-cffd-4452-bc35-de2a47f3fa1a\", \"data\": {\"id\": \"0c8bc7e1-cffd-4452-bc35-de2a47f3fa1a\", \"workflow_id\": \"bd1896bc-9174-4362-b32a-07fbb5125667\", \"status\": \"failed\", \"outputs\": {}, \"error\": \"Traceback (most recent call last):\\n  File \\\"/var/sandbox/sandbox-python/tmp/047d152c_65f8_43b0_b9c4_fece3054234b.py\\\", line 48, in <module>\\n  File \\\"<string>\\\", line 16, in <module>\\n  File \\\"<string>\\\", line 3, in main\\nException\\nerror: exit status 255\\n\", \"elapsed_time\": 0.114811, \"total_tokens\": 0, \"total_steps\": 2, \"created_at\": 1773128777, \"finished_at\": 1773128777}}",
+      "error_message": null,
+      "retry_count": 0,
+      "max_retries": 3,
+      "dependencies": "[]",
+      "confirm_deadline": null,
+      "confirm_action": "cancelled",
+      "execution_log": "{\"task_id\": \"659dae12-c1ce-4b05-962f-3e890d7de584\", \"target_type\": \"agent\", \"target_name\": \"发送信息给指定联系人\", \"status\": \"completed\", \"input_params\": {}, \"output_result\": {\"task_id\": \"32c24615-0f04-483c-874b-fa93f1e8e6a2\", \"workflow_run_id\": \"0c8bc7e1-cffd-4452-bc35-de2a47f3fa1a\", \"data\": {\"id\": \"0c8bc7e1-cffd-4452-bc35-de2a47f3fa1a\", \"workflow_id\": \"bd1896bc-9174-4362-b32a-07fbb5125667\", \"status\": \"failed\", \"outputs\": {}, \"error\": \"Traceback (most recent call last):\\n  File \\\"/var/sandbox/sandbox-python/tmp/047d152c_65f8_43b0_b9c4_fece3054234b.py\\\", line 48, in <module>\\n  File \\\"<string>\\\", line 16, in <module>\\n  File \\\"<string>\\\", line 3, in main\\nException\\nerror: exit status 255\\n\", \"elapsed_time\": 0.114811, \"total_tokens\": 0, \"total_steps\": 2, \"created_at\": 1773128777, \"finished_at\": 1773128777}}, \"error_message\": null, \"logged_at\": \"2026-03-10T15:46:17\"}",
+      "id": "659dae12-c1ce-4b05-962f-3e890d7de584",
+      "created_at": "2026-03-10 06:39:47",
+      "updated_at": "2026-03-10 07:46:17",
+      "user_id": "default"
+    }
+  ],
+  "schedule_plans": [
+    {
+      "name": "推送工作报告",
+      "status": "active",
+      "is_recurring": 0,
+      "recurrence_cron": null,
+      "recurrence_count": 0,
+      "next_run_at": null,
+      "id": "5290adcf-de26-49b2-b648-d20200e77444",
+      "created_at": "2026-03-10 06:39:47",
+      "updated_at": "2026-03-10 06:39:47",
+      "user_id": "default"
+    },
+    {
+      "name": "推送工作报告",
+      "status": "active",
+      "is_recurring": 0,
+      "recurrence_cron": null,
+      "recurrence_count": 0,
+      "next_run_at": null,
+      "id": "98851645-9770-4885-9f3f-2504b2fa66dd",
+      "created_at": "2026-03-10 02:31:27",
+      "updated_at": "2026-03-10 02:31:27",
+      "user_id": "default"
+    }
+  ]
+}

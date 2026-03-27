@@ -183,6 +183,7 @@ function LLMTab({
             temperature: config.temperature ?? 0.7,
             top_p: config.top_p ?? 0.9,
             max_tokens: config.max_tokens ?? 4096,
+            timeout: config.timeout ?? 180,
             prompt_template: splitPrompt.editablePrompt,
           });
         }
@@ -253,6 +254,7 @@ function LLMTab({
         top_p: values.top_p,
         top_p_enabled: useTopP,
         max_tokens: values.max_tokens,
+        timeout: values.timeout,
         prompt_template: buildPromptTemplatePayload(values.prompt_template),
       });
       form.setFields([{ name: 'prompt_template', errors: [] }]);
@@ -296,6 +298,7 @@ function LLMTab({
         top_p: values.top_p,
         top_p_enabled: useTopP,
         max_tokens: values.max_tokens,
+        timeout: values.timeout,
         prompt_template: buildPromptTemplatePayload(values.prompt_template),
       });
 
@@ -329,6 +332,7 @@ function LLMTab({
           temperature: 0.7,
           top_p: 0.9,
           max_tokens: 4096,
+          timeout: 180,
           prompt_template: '',
         }}
       >
@@ -405,6 +409,20 @@ function LLMTab({
             </Form.Item>
             <Form.Item name="max_tokens" label="Max Tokens">
               <InputNumber min={1} max={128000} style={{ width: 120 }} />
+            </Form.Item>
+            <Form.Item
+              name="timeout"
+              label={
+                <Space size={6}>
+                  <span>超时时间（秒）</span>
+                  <Tooltip title="LLM 请求的最大等待时间。超过该时间后请求将自动中断并提示超时。建议根据模型响应速度调整，默认 180 秒。">
+                    <Text type="secondary" style={{ cursor: 'help' }}>(?)</Text>
+                  </Tooltip>
+                </Space>
+              }
+              extra="范围 1-600 秒，默认 180 秒"
+            >
+              <InputNumber min={1} max={600} step={1} style={{ width: 160 }} addonAfter="秒" />
             </Form.Item>
             <Form.Item
               name="prompt_template"

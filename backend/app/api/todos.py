@@ -42,7 +42,8 @@ def _normalize_recurrence_fields(data: dict) -> dict:
 
 
 async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
-    from app.api.orchestration import get_orchestration_entry, map_orchestration_status_to_todo_status
+    from app.api.orchestration import map_orchestration_status_to_todo_status
+    from app.models import Orchestration
 
     result = await db.execute(
         select(Todo).where(
@@ -56,7 +57,7 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
     changed = False
     now = utc_now_naive()
 
-    orchestration_ids = [todo.orchestration_id for todo in items if todo.orchestration_id]
+    orchestration_ids = list({todo.orchestration_id for todo in items if todo.orchestration_id})
     latest_completion_by_orch: dict[str, datetime] = {}
     if orchestration_ids:
         try:
@@ -74,13 +75,23 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
                 if prev is None or task.completed_at > prev:
                     latest_completion_by_orch[orch_id] = task.completed_at
         except OperationalError as exc:
-            # Some unit tests intentionally create only the todos table.
             if "schedule_tasks" not in str(exc).lower():
                 raise
 
+    orch_map: dict[str, Orchestration] = {}
+    if orchestration_ids:
+        try:
+            orch_result = await db.execute(
+                select(Orchestration).where(Orchestration.id.in_(orchestration_ids))
+            )
+            for o in orch_result.scalars().all():
+                orch_map[o.id] = o
+        except OperationalError:
+            pass
+
     for todo in items:
-        entry = get_orchestration_entry(todo.orchestration_id or "") if todo.orchestration_id else None
-        if not entry:
+        orch = orch_map.get(todo.orchestration_id or "") if todo.orchestration_id else None
+        if not orch:
             if todo.status != "pending_confirm" or todo.orchestration_id is not None or todo.completed_at is not None:
                 todo.status = "pending_confirm"
                 todo.orchestration_id = None
@@ -88,7 +99,7 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
                 changed = True
             continue
 
-        next_status = map_orchestration_status_to_todo_status(entry.get("status"))
+        next_status = map_orchestration_status_to_todo_status(orch.status)
         if todo.status != next_status:
             todo.status = next_status
             changed = True
@@ -166,7 +177,7 @@ async def create_todo(
     todo = Todo(
         title=data["title"],
         description=data.get("description"),
-        status="pending",
+        status="pending_confirm",
         priority=data.get("priority", "medium"),
         source=data.get("source", "manual"),
         execution_mode=data.get("execution_mode", "system"),

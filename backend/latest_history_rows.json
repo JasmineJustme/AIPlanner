@@ -1,0 +1,20 @@
+[
+  {
+    "id": "ba526e74-6fda-4dfd-90de-d51c54fdc81e",
+    "task_id": "c344bee0-923f-4842-bc22-c01fc30d4f15",
+    "agent_name": "发送信息给指定联系人",
+    "started_at": "2026-03-11 16:14:56.000000",
+    "completed_at": "2026-03-11 16:14:57.000000",
+    "duration_ms": 1000,
+    "input_params": "{\"account\": \"\\u5168\\u884c\\u5ba4\\u7ecf\\u7406\\u7684\\u8d26\\u53f7\", \"context\": \"\\u6bcf\\u54685\\u4e0b\\u53483\\u70b9\\u5411\\u5168\\u884c\\u5ba4\\u7ecf\\u7406\\u63a8\\u9001\\u8be5\\u5ba4\\u8fd9\\u5468\\u7684\\u5de5\\u4f5c\\u62a5\\u544a\\u603b\\u7ed3\"}"
+  },
+  {
+    "id": "a57298d4-cd8f-4c15-be97-58cf1b905331",
+    "task_id": "c344bee0-923f-4842-bc22-c01fc30d4f15",
+    "agent_name": "发送信息给指定联系人",
+    "started_at": "2026-03-11 16:10:56.000000",
+    "completed_at": "2026-03-11 16:10:56.000000",
+    "duration_ms": 0,
+    "input_params": "{\"account\": \"\\u5168\\u884c\\u5ba4\\u7ecf\\u7406\\u7684\\u8d26\\u53f7\", \"context\": \"\\u6bcf\\u54685\\u4e0b\\u53483\\u70b9\\u5411\\u5168\\u884c\\u5ba4\\u7ecf\\u7406\\u63a8\\u9001\\u8be5\\u5ba4\\u8fd9\\u5468\\u7684\\u5de5\\u4f5c\\u62a5\\u544a\\u603b\\u7ed3\"}"
+  }
+]

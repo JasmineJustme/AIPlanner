@@ -1,0 +1,38 @@
+{
+  "status_code": 200,
+  "top_level_keys": [
+    "opening_statement",
+    "suggested_questions",
+    "suggested_questions_after_answer",
+    "speech_to_text",
+    "text_to_speech",
+    "retriever_resource",
+    "annotation_reply",
+    "more_like_this",
+    "user_input_form",
+    "sensitive_word_avoidance",
+    "file_upload",
+    "system_parameters"
+  ],
+  "user_input_form_type": "list",
+  "user_input_form_len": 1,
+  "first_user_input_item": {
+    "paragraph": {
+      "variable": "message",
+      "label": "发送的信息内容",
+      "type": "paragraph",
+      "required": true,
+      "options": [],
+      "placeholder": "",
+      "default": "",
+      "hint": ""
+    }
+  },
+  "system_parameters_keys": [
+    "image_file_size_limit",
+    "video_file_size_limit",
+    "audio_file_size_limit",
+    "file_size_limit",
+    "workflow_file_upload_limit"
+  ]
+}

@@ -1,28 +1,28 @@
-import json as _json
+import asyncio
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import async_session_factory, get_db
 from app.engine.orchestrator import orchestrator
-from app.models import Todo, SchedulePlan, ScheduleTask, Agent, WAgent
+from app.models import Todo, SchedulePlan, ScheduleTask, Agent, WAgent, Orchestration
 from app.services.schedule_rebalance import rebalance_schedule_tasks
 from app.services.sse_manager import sse_manager
-from app.utils.timezone import beijing_to_utc_naive, parse_datetime_value, utc_now_naive, utc_to_beijing_iso_from_any
+from app.utils.timezone import (
+    beijing_to_utc_naive,
+    parse_datetime_value,
+    utc_now_naive,
+    utc_to_beijing_iso_from_any,
+)
 from loguru import logger
 
+_background_tasks: set[asyncio.Task] = set()
+
 router = APIRouter(prefix="/orchestration", tags=["orchestration"])
-
-_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-_DATA_DIR.mkdir(exist_ok=True)
-_STORE_FILE = _DATA_DIR / "orchestrations.json"
-
-_orchestration_store: dict[str, dict] = {}
 
 _RESPONSE_TIME_KEYS = {
     "submitted_at",
@@ -52,55 +52,12 @@ def _convert_times_to_beijing(data):
     return data
 
 
-def _prune_cancelled_orchestrations() -> list[str]:
-    removed_ids = [
-        orch_id
-        for orch_id, entry in list(_orchestration_store.items())
-        if entry.get("status") == "cancelled"
-    ]
-    for orch_id in removed_ids:
-        _orchestration_store.pop(orch_id, None)
-    return removed_ids
-
-
-def _load_store():
-    global _orchestration_store
-    if _STORE_FILE.exists():
-        try:
-            _orchestration_store = _json.loads(_STORE_FILE.read_text(encoding="utf-8"))
-            removed_ids = _prune_cancelled_orchestrations()
-            if removed_ids:
-                logger.info(f"Pruned {len(removed_ids)} cancelled orchestrations while loading store")
-                _save_store()
-            logger.info(f"Loaded {len(_orchestration_store)} orchestrations from {_STORE_FILE}")
-            return
-        except Exception as e:
-            logger.warning(f"Failed to load orchestration store: {e}")
-    _orchestration_store = {}
-
-
-def _save_store():
-    removed_ids = _prune_cancelled_orchestrations()
-    if removed_ids:
-        logger.info(f"Pruned {len(removed_ids)} cancelled orchestrations before saving store")
-    try:
-        _STORE_FILE.write_text(
-            _json.dumps(_orchestration_store, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-    except Exception as e:
-        logger.error(f"Failed to save orchestration store: {e}")
-
-
-async def _broadcast_orchestration_complete(orch_id: str, status: str, error: str | None = None, removed: bool = False) -> None:
+async def _broadcast_orchestration_complete(
+    orch_id: str, status: str, error: str | None = None, removed: bool = False
+) -> None:
     await sse_manager.broadcast(
         "orchestration_complete",
-        {
-            "orch_id": orch_id,
-            "status": status,
-            "error": error,
-            "removed": removed,
-        },
+        {"orch_id": orch_id, "status": status, "error": error, "removed": removed},
     )
 
 
@@ -108,132 +65,45 @@ class SubmitPayload(BaseModel):
     todo_ids: list[str]
 
 
-MOCK_DETAILS = {
-    "orch-a1b2c3": {
-        "orch_id": "orch-a1b2c3",
-        "summary": "审计2025年Q4财务报表 等3个任务",
-        "status": "pending_confirm",
-        "submitted_at": "2026-03-04T09:00:00",
-        "todos": [
-            {
-                "id": "todo-001",
-                "title": "审计2025年Q4财务报表",
-                "source": "email",
-                "priority": "high",
-                "status": "pending",
-                "deadline": "2026-03-15T18:00:00",
-                "created_at": "2026-03-01T09:00:00",
-                "updated_at": "2026-03-01T09:00:00",
-            },
-            {
-                "id": "todo-002",
-                "title": "核查供应商合同合规性",
-                "source": "calendar",
-                "priority": "medium",
-                "status": "pending",
-                "deadline": "2026-03-20T18:00:00",
-                "created_at": "2026-03-01T09:30:00",
-                "updated_at": "2026-03-01T09:30:00",
-            },
-            {
-                "id": "todo-003",
-                "title": "整理内部控制流程文档",
-                "source": "project_progress",
-                "priority": "low",
-                "status": "pending",
-                "deadline": "2026-03-25T18:00:00",
-                "created_at": "2026-03-01T10:00:00",
-                "updated_at": "2026-03-01T10:00:00",
-            },
-        ],
-        "suggested_agent": {
-            "id": "agent-fin-001",
-            "name": "财务审计Agent",
-            "type": "dify_agent",
-            "is_enabled": True,
-        },
-        "suggested_wagent": None,
-        "plan": {
-            "plan_type": "agent",
-            "recommended_id": "agent-fin-001",
-            "recommended_name": "财务审计Agent",
-            "reason": "该批次包含财务报表审计和合同合规核查任务，财务审计Agent具备报表分析、合规检查等能力，适合统一处理。",
-            "input_params": {
-                "audit_period": "2025-Q4",
-                "report_type": "financial_statement",
-                "compliance_standard": "CAS",
-            },
-            "priority": "high",
-            "estimated_duration_minutes": 120,
-        },
-        "llm_reason": "经分析，3个待办任务均与财务审计相关：Q4财务报表审计为核心任务（高优先级），供应商合同合规检查和内控文档整理为辅助任务。推荐使用「财务审计Agent」统一处理，预计耗时约2小时。建议优先完成报表审计，再进行合规核查。",
-    },
-    "orch-d4e5f6": {
-        "orch_id": "orch-d4e5f6",
-        "summary": "自动化生成月度合规报告",
-        "status": "pending_confirm",
-        "submitted_at": "2026-03-04T08:30:00",
-        "todos": [
-            {
-                "id": "todo-004",
-                "title": "自动化生成月度合规报告",
-                "source": "project_progress",
-                "priority": "medium",
-                "status": "pending",
-                "deadline": "2026-03-10T18:00:00",
-                "created_at": "2026-03-02T08:00:00",
-                "updated_at": "2026-03-02T08:00:00",
-            },
-        ],
-        "suggested_agent": None,
-        "suggested_wagent": {
-            "id": "wagent-report-001",
-            "name": "报告生成W-Agent",
-            "is_enabled": True,
-        },
-        "plan": {
-            "plan_type": "new_wagent",
-            "recommended_id": "wagent-report-001",
-            "recommended_name": "报告生成W-Agent",
-            "reason": "月度合规报告需要多步骤流程：数据采集→合规检查→报告生成→格式化输出。推荐使用W-Agent编排工作流执行。",
-            "input_params": {
-                "report_month": "2026-02",
-                "template": "monthly_compliance",
-                "output_format": "pdf",
-            },
-            "priority": "medium",
-            "estimated_duration_minutes": 45,
-            "steps": [
-                {"order": 1, "workflow_name": "数据采集与清洗"},
-                {"order": 2, "workflow_name": "合规规则检查"},
-                {"order": 3, "workflow_name": "报告内容生成"},
-                {"order": 4, "workflow_name": "PDF格式化输出"},
-            ],
-        },
-        "llm_reason": "该任务需要生成月度合规报告，涉及数据采集、规则检查、内容生成和格式化输出4个步骤。推荐创建新的W-Agent工作流来编排执行，各步骤串行完成，预计耗时45分钟。",
-    },
-}
-
-_load_store()
-
-if not _orchestration_store:
-    for _k, _v in MOCK_DETAILS.items():
-        _orchestration_store[_k] = _v
-    _save_store()
+# ---------------------------------------------------------------------------
+# Public helpers – imported by scheduling.py, todos.py, scheduler.py
+# ---------------------------------------------------------------------------
 
 
-def update_orchestration_status(orch_id: str, status: str, error: str | None = None) -> bool:
-    if orch_id in _orchestration_store:
-        _orchestration_store[orch_id]["status"] = status
-        if error:
-            _orchestration_store[orch_id]["error"] = error
-        _save_store()
-        return True
-    return False
+async def get_orchestration(db: AsyncSession, orch_id: str) -> Orchestration | None:
+    """Return the ORM object (for callers that need to mutate it)."""
+    return await db.get(Orchestration, orch_id)
 
 
-def get_orchestration_entry(orch_id: str) -> dict | None:
-    return _orchestration_store.get(orch_id)
+async def get_orchestration_entry(db: AsyncSession, orch_id: str) -> dict | None:
+    """Return a plain dict snapshot (read-only convenience)."""
+    orch = await db.get(Orchestration, orch_id)
+    return orch.to_dict() if orch else None
+
+
+async def update_orchestration_status(
+    db: AsyncSession, orch_id: str, status: str, error: str | None = None
+) -> bool:
+    orch = await db.get(Orchestration, orch_id)
+    if not orch:
+        return False
+    orch.status = status
+    if error:
+        orch.error = error
+    if status == "pending_confirm":
+        _restore_plan_input_params_from_snapshot(orch)
+    await db.flush()
+    return True
+
+
+def map_orchestration_status_to_todo_status(status: str | None) -> str:
+    if status in {"analyzing", "pending_confirm", "failed"}:
+        return "orchestrating"
+    if status == "confirmed":
+        return "scheduling"
+    if status == "completed":
+        return "completed"
+    return "pending_confirm"
 
 
 def build_orchestration_summary(todo_items, fallback: str = "未命名任务") -> str:
@@ -254,28 +124,29 @@ def build_orchestration_summary(todo_items, fallback: str = "未命名任务") -
     return first_text
 
 
-def map_orchestration_status_to_todo_status(status: str | None) -> str:
-    if status in {"analyzing", "pending_confirm", "failed"}:
-        return "orchestrating"
-    if status == "confirmed":
-        return "scheduling"
-    if status == "completed":
-        return "completed"
-    return "pending_confirm"
-
-
-async def sync_todos_for_orchestration(db: AsyncSession, orch_id: str, entry: dict | None = None) -> None:
-    target_entry = entry or _orchestration_store.get(orch_id)
-    if not target_entry:
+async def sync_todos_for_orchestration(
+    db: AsyncSession, orch_id: str, status_override: str | None = None
+) -> None:
+    orch = await db.get(Orchestration, orch_id)
+    orchestration_status = status_override or (orch.status if orch else None)
+    if not orchestration_status:
         return
 
-    todo_ids = [item.get("id") for item in target_entry.get("todos", []) if item.get("id")]
-    if not todo_ids:
-        return
-
-    result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
+    snapshot_ids = [
+        item.get("id")
+        for item in ((orch.todos_snapshot if orch else None) or [])
+        if item.get("id")
+    ]
+    if snapshot_ids:
+        result = await db.execute(select(Todo).where(Todo.id.in_(snapshot_ids)))
+    else:
+        result = await db.execute(
+            select(Todo).where(Todo.orchestration_id == orch_id)
+        )
     todos = result.scalars().all()
-    orchestration_status = target_entry.get("status")
+    if not todos:
+        return
+
     todo_status = map_orchestration_status_to_todo_status(orchestration_status)
     should_clear_orchestration_id = orchestration_status == "cancelled"
     completed_at: datetime | None = None
@@ -302,7 +173,14 @@ async def sync_todos_for_orchestration(db: AsyncSession, orch_id: str, entry: di
     await db.flush()
 
 
-def _normalize_plan_time_value(value: str | datetime | None, assume_beijing: bool = True) -> str | None:
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _normalize_plan_time_value(
+    value: str | datetime | None, assume_beijing: bool = True
+) -> str | None:
     if not value:
         return None
     parsed = parse_datetime_value(value)
@@ -331,7 +209,9 @@ def _normalize_recurrence_payload(data: dict | None) -> dict:
     payload = data or {}
     is_recurring = bool(payload.get("is_recurring", False))
     recurrence_cron = payload.get("recurrence_cron") if is_recurring else None
-    recurrence_count = int(payload.get("recurrence_count") or 0) if is_recurring else 0
+    recurrence_count = (
+        int(payload.get("recurrence_count") or 0) if is_recurring else 0
+    )
     return {
         "is_recurring": is_recurring,
         "recurrence_cron": recurrence_cron,
@@ -356,20 +236,30 @@ def _apply_recurrence_to_plan(plan: dict | None, defaults: dict) -> dict:
     merged = dict(plan or {})
     recurrence = _normalize_recurrence_payload(
         {
-            "is_recurring": merged.get("is_recurring", defaults.get("is_recurring", False)),
-            "recurrence_cron": merged.get("recurrence_cron", defaults.get("recurrence_cron")),
-            "recurrence_count": merged.get("recurrence_count", defaults.get("recurrence_count", 0)),
+            "is_recurring": merged.get(
+                "is_recurring", defaults.get("is_recurring", False)
+            ),
+            "recurrence_cron": merged.get(
+                "recurrence_cron", defaults.get("recurrence_cron")
+            ),
+            "recurrence_count": merged.get(
+                "recurrence_count", defaults.get("recurrence_count", 0)
+            ),
         }
     )
     merged.update(recurrence)
     return merged
 
 
-async def _sync_todo_recurrence_for_orchestration(db: AsyncSession, entry: dict) -> None:
-    todo_ids = [item.get("id") for item in entry.get("todos", []) if item.get("id")]
+async def _sync_todo_recurrence_for_orchestration(
+    db: AsyncSession, orch: Orchestration
+) -> None:
+    todo_ids = [
+        item.get("id") for item in (orch.todos_snapshot or []) if item.get("id")
+    ]
     if not todo_ids:
         return
-    normalized = _normalize_recurrence_payload(entry.get("plan") or {})
+    normalized = _normalize_recurrence_payload(orch.plan or {})
     result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
     for todo in result.scalars().all():
         todo.is_recurring = normalized["is_recurring"]
@@ -378,7 +268,9 @@ async def _sync_todo_recurrence_for_orchestration(db: AsyncSession, entry: dict)
     await db.flush()
 
 
-async def _cancel_schedule_for_orchestration(db: AsyncSession, orch_id: str) -> None:
+async def _cancel_schedule_for_orchestration(
+    db: AsyncSession, orch_id: str
+) -> None:
     existing_task_result = await db.execute(
         select(ScheduleTask).where(ScheduleTask.orchestration_id == orch_id)
     )
@@ -396,15 +288,19 @@ async def _cancel_schedule_for_orchestration(db: AsyncSession, orch_id: str) -> 
             task.completed_at = now
 
     if plan_ids:
-        plans_result = await db.execute(select(SchedulePlan).where(SchedulePlan.id.in_(plan_ids)))
+        plans_result = await db.execute(
+            select(SchedulePlan).where(SchedulePlan.id.in_(plan_ids))
+        )
         for plan in plans_result.scalars().all():
             plan.status = "cancelled"
 
     await db.flush()
 
 
-async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entry: dict) -> None:
-    plan_data = entry.get("plan") or {}
+async def ensure_schedule_for_orchestration(
+    db: AsyncSession, orch_id: str, orch: Orchestration
+) -> None:
+    plan_data = orch.plan or {}
     existing_task_result = await db.execute(
         select(ScheduleTask)
         .where(
@@ -418,13 +314,10 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
     schedule_plan = None
     if schedule_task:
         schedule_plan = await db.get(SchedulePlan, schedule_task.plan_id)
-        # A previously cancelled plan should never be reused for a new confirmation.
         if schedule_plan and schedule_plan.status == "cancelled":
             schedule_task = None
             schedule_plan = None
 
-    # Guard against duplicate submissions that would create another schedule plan
-    # for the same orchestration id when historical task records already exist.
     if schedule_task is None:
         duplicate_task_result = await db.execute(
             select(ScheduleTask)
@@ -439,7 +332,7 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
 
     if schedule_plan is None:
         schedule_plan = SchedulePlan(
-            name=entry.get("summary") or f"编排任务 {orch_id}",
+            name=orch.summary or f"编排任务 {orch_id}",
             status="active",
             is_recurring=False,
         )
@@ -449,7 +342,11 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
     recommended_id = plan_data.get("recommended_id")
     plan_type = plan_data.get("plan_type")
     agent_id = recommended_id if plan_type == "agent" and recommended_id else None
-    wagent_id = recommended_id if plan_type in ("wagent", "new_wagent") and recommended_id else None
+    wagent_id = (
+        recommended_id
+        if plan_type in ("wagent", "new_wagent") and recommended_id
+        else None
+    )
     scheduled_at = _parse_schedule_datetime(plan_data.get("start_time"))
 
     if schedule_task is None:
@@ -472,7 +369,9 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
         schedule_task.agent_id = agent_id
         schedule_task.wagent_id = wagent_id
         schedule_task.status = "pending"
-        schedule_task.priority = plan_data.get("priority") or schedule_task.priority or "medium"
+        schedule_task.priority = (
+            plan_data.get("priority") or schedule_task.priority or "medium"
+        )
         schedule_task.scheduled_at = scheduled_at
         if schedule_task.original_scheduled_at is None:
             schedule_task.original_scheduled_at = scheduled_at
@@ -481,7 +380,7 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
         schedule_task.input_params = plan_data.get("input_params") or {}
         schedule_task.error_message = None
 
-    schedule_plan.name = entry.get("summary") or schedule_plan.name
+    schedule_plan.name = orch.summary or schedule_plan.name
     schedule_plan.status = "active"
     recurrence = _normalize_recurrence_payload(plan_data)
     schedule_plan.is_recurring = recurrence["is_recurring"]
@@ -490,7 +389,9 @@ async def ensure_schedule_for_orchestration(db: AsyncSession, orch_id: str, entr
     await db.flush()
 
 
-def _build_recommended_target(target_type: str, target_id: str | None, target_name: str | None) -> dict | None:
+def _build_recommended_target(
+    target_type: str, target_id: str | None, target_name: str | None
+) -> dict | None:
     if not target_id:
         return None
     return {
@@ -501,50 +402,73 @@ def _build_recommended_target(target_type: str, target_id: str | None, target_na
     }
 
 
-def _snapshot_llm_recommendation(entry: dict) -> None:
-    if entry.get("llm_recommended_id") and entry.get("llm_recommended_type"):
+def _snapshot_llm_recommendation(orch: Orchestration) -> None:
+    if orch.llm_recommended_id and orch.llm_recommended_type:
         return
 
-    plan = entry.get("plan") or {}
-    suggested_agent = entry.get("suggested_agent")
-    suggested_wagent = entry.get("suggested_wagent")
+    plan = orch.plan or {}
+    suggested_agent = orch.suggested_agent
+    suggested_wagent = orch.suggested_wagent
     plan_type = plan.get("plan_type")
     recommended_id = plan.get("recommended_id")
     recommended_name = plan.get("recommended_name")
     recommended_input_params = plan.get("input_params")
 
     def _snapshot_input_params_once() -> None:
-        if "llm_recommended_input_params" in entry:
+        if orch.llm_recommended_input_params is not None:
             return
-        entry["llm_recommended_input_params"] = dict(recommended_input_params) if isinstance(recommended_input_params, dict) else {}
+        orch.llm_recommended_input_params = (
+            dict(recommended_input_params)
+            if isinstance(recommended_input_params, dict)
+            else {}
+        )
 
     if suggested_agent and suggested_agent.get("id"):
-        entry["llm_recommended_id"] = suggested_agent.get("id")
-        entry["llm_recommended_name"] = suggested_agent.get("name") or recommended_name or ""
-        entry["llm_recommended_type"] = "agent"
+        orch.llm_recommended_id = suggested_agent.get("id")
+        orch.llm_recommended_name = (
+            suggested_agent.get("name") or recommended_name or ""
+        )
+        orch.llm_recommended_type = "agent"
         _snapshot_input_params_once()
         return
     if suggested_wagent and suggested_wagent.get("id"):
-        entry["llm_recommended_id"] = suggested_wagent.get("id")
-        entry["llm_recommended_name"] = suggested_wagent.get("name") or recommended_name or ""
-        entry["llm_recommended_type"] = "wagent"
+        orch.llm_recommended_id = suggested_wagent.get("id")
+        orch.llm_recommended_name = (
+            suggested_wagent.get("name") or recommended_name or ""
+        )
+        orch.llm_recommended_type = "wagent"
         _snapshot_input_params_once()
         return
     if recommended_id and plan_type in {"agent", "wagent", "new_wagent"}:
-        entry["llm_recommended_id"] = recommended_id
-        entry["llm_recommended_name"] = recommended_name or ""
-        entry["llm_recommended_type"] = "wagent" if plan_type in {"wagent", "new_wagent"} else "agent"
+        orch.llm_recommended_id = recommended_id
+        orch.llm_recommended_name = recommended_name or ""
+        orch.llm_recommended_type = (
+            "wagent" if plan_type in {"wagent", "new_wagent"} else "agent"
+        )
         _snapshot_input_params_once()
 
 
-def _apply_selected_executor(entry: dict, plan_type: str, recommended_id: str | None, recommended_name: str | None) -> None:
-    plan = entry.get("plan") or {}
+def _apply_selected_executor(
+    orch: Orchestration,
+    plan_type: str,
+    recommended_id: str | None,
+    recommended_name: str | None,
+) -> None:
+    plan = dict(orch.plan or {})
     plan["plan_type"] = plan_type
     plan["recommended_id"] = recommended_id or ""
     plan["recommended_name"] = recommended_name or ""
-    entry["plan"] = plan
-    entry["suggested_agent"] = _build_recommended_target("agent", recommended_id, recommended_name) if plan_type == "agent" else None
-    entry["suggested_wagent"] = _build_recommended_target("wagent", recommended_id, recommended_name) if plan_type in {"wagent", "new_wagent"} else None
+    orch.plan = plan
+    orch.suggested_agent = (
+        _build_recommended_target("agent", recommended_id, recommended_name)
+        if plan_type == "agent"
+        else None
+    )
+    orch.suggested_wagent = (
+        _build_recommended_target("wagent", recommended_id, recommended_name)
+        if plan_type in {"wagent", "new_wagent"}
+        else None
+    )
 
 
 def _build_plan_input_params_for_selected_agent(raw_params) -> tuple[dict, list[str]]:
@@ -583,11 +507,209 @@ def _build_plan_input_params_for_selected_agent(raw_params) -> tuple[dict, list[
     return defaults, editable_keys
 
 
-def _mark_analysis_error(entry: dict, error: str) -> str:
-    # On analysis errors keep the record visible in pending_confirm, and retain error for UI hints.
-    entry["status"] = "pending_confirm"
-    entry["error"] = error
+def _restore_plan_input_params_from_snapshot(orch: Orchestration) -> None:
+    plan = orch.plan
+    if not plan:
+        return
+    current_params = plan.get("input_params")
+    if current_params:
+        return
+    snapshot = orch.llm_recommended_input_params
+    if not isinstance(snapshot, dict) or not snapshot:
+        return
+    rec_id = plan.get("recommended_id")
+    llm_id = orch.llm_recommended_id
+    should_restore = (rec_id and llm_id and rec_id == llm_id) or (
+        not rec_id and not llm_id
+    )
+    if should_restore:
+        plan = dict(plan)
+        plan["input_params"] = dict(snapshot)
+        orch.plan = plan
+
+
+def _mark_analysis_error(orch: Orchestration, error: str) -> str:
+    orch.status = "pending_confirm"
+    orch.error = error
     return "pending_confirm"
+
+
+def _build_llm_fallback_warning(plan_result: dict) -> str | None:
+    llm_error = str(plan_result.get("llm_error") or "").strip()
+    if not llm_error:
+        return None
+    return f"LLM 未返回有效结果，已自动使用兜底编排计划：{llm_error}"
+
+
+# ---------------------------------------------------------------------------
+# Background analysis task
+# ---------------------------------------------------------------------------
+
+
+def _apply_plan_to_orchestration(
+    orch: Orchestration,
+    plan_result: dict,
+    recurrence_defaults: dict,
+) -> str:
+    """Apply a successful LLM plan result to the orchestration.
+    Returns the event status string.
+    """
+    orch.status = plan_result.get("status", "pending_confirm")
+    orch.plan = _apply_recurrence_to_plan(
+        plan_result.get("plan"), recurrence_defaults
+    )
+    orch.llm_reason = plan_result.get("llm_reason")
+    fallback_warning = _build_llm_fallback_warning(plan_result)
+    orch.error = fallback_warning
+
+    plan = orch.plan or {}
+    if plan.get("plan_type") in ("agent",):
+        rec_id = plan.get("recommended_id")
+        rec_name = plan.get("recommended_name", "")
+        orch.suggested_agent = (
+            {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "agent"}
+            if rec_id
+            else None
+        )
+    elif plan.get("plan_type") in ("wagent", "new_wagent"):
+        rec_id = plan.get("recommended_id")
+        rec_name = plan.get("recommended_name", "")
+        orch.suggested_wagent = (
+            {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "wagent"}
+            if rec_id
+            else None
+        )
+    _snapshot_llm_recommendation(orch)
+    return orch.status
+
+
+async def _process_analysis(
+    db: AsyncSession,
+    orch_id: str,
+    todo_ids: list[str],
+    recurrence_defaults: dict,
+) -> tuple[str, str | None]:
+    """Core analysis logic – callable from tests with any DB session.
+
+    Returns ``(event_status, error_msg)``.
+    The caller is responsible for committing and broadcasting.
+    """
+    orch = await db.get(Orchestration, orch_id)
+    if not orch or orch.status != "analyzing":
+        return (orch.status if orch else "cancelled"), None
+
+    event_status = "analyzing"
+    error_msg: str | None = None
+
+    try:
+        plan_result = await orchestrator.orchestrate(db, todo_ids)
+
+        if "error" in plan_result:
+            event_status = _mark_analysis_error(orch, plan_result["error"])
+            error_msg = plan_result["error"]
+        else:
+            event_status = _apply_plan_to_orchestration(
+                orch, plan_result, recurrence_defaults
+            )
+            if orch.error:
+                error_msg = orch.error
+    except Exception as e:
+        logger.error("Orchestration analysis failed for {}: {}", orch_id, e)
+        event_status = _mark_analysis_error(orch, f"编排分析失败: {str(e)}")
+        error_msg = str(e)
+
+    if orch.status == "analyzing":
+        event_status = _mark_analysis_error(
+            orch, "LLM 分析超时或被中断，请重新编排"
+        )
+        error_msg = orch.error
+
+    await sync_todos_for_orchestration(db, orch_id)
+    return event_status, error_msg
+
+
+async def _run_orchestration_analysis(
+    orch_id: str,
+    todo_ids: list[str],
+    recurrence_defaults: dict,
+) -> None:
+    """Background task: run LLM analysis with its own DB session.
+
+    Guarantees the orchestration status transitions out of "analyzing" before
+    returning, regardless of whether the LLM call succeeds or fails.
+    """
+    event_status = "analyzing"
+    error_msg: str | None = None
+
+    try:
+        async with async_session_factory() as db:
+            event_status, error_msg = await _process_analysis(
+                db, orch_id, todo_ids, recurrence_defaults
+            )
+            await db.commit()
+    except Exception as e:
+        logger.error(
+            "Critical error in background orchestration for {}: {}", orch_id, e
+        )
+        try:
+            async with async_session_factory() as recovery_db:
+                orch = await recovery_db.get(Orchestration, orch_id)
+                if orch and orch.status == "analyzing":
+                    event_status = _mark_analysis_error(
+                        orch, f"编排分析失败: {str(e)}"
+                    )
+                    error_msg = orch.error
+                    await sync_todos_for_orchestration(recovery_db, orch_id)
+                    await recovery_db.commit()
+        except Exception:
+            logger.error("Recovery commit also failed for {}", orch_id)
+
+    try:
+        await _broadcast_orchestration_complete(orch_id, event_status, error_msg)
+    except Exception:
+        pass
+
+
+def _launch_analysis(
+    orch_id: str,
+    todo_ids: list[str],
+    recurrence_defaults: dict,
+) -> asyncio.Task:
+    """Fire-and-forget the analysis background task."""
+    task = asyncio.create_task(
+        _run_orchestration_analysis(orch_id, todo_ids, recurrence_defaults)
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+async def recover_stale_analyzing_orchestrations() -> int:
+    """Reset orchestrations stuck at 'analyzing' (e.g. after server restart).
+
+    Called during application startup.  Returns the number of recovered records.
+    """
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(Orchestration).where(Orchestration.status == "analyzing")
+        )
+        stale = result.scalars().all()
+        if not stale:
+            return 0
+
+        for orch in stale:
+            orch.status = "pending_confirm"
+            orch.error = "系统重启后恢复：LLM 分析未完成，请重新编排"
+            await sync_todos_for_orchestration(db, orch.id)
+
+        await db.commit()
+        logger.warning("Recovered {} stale analyzing orchestration(s)", len(stale))
+        return len(stale)
+
+
+# ---------------------------------------------------------------------------
+# Route handlers
+# ---------------------------------------------------------------------------
 
 
 @router.post("/submit")
@@ -599,7 +721,7 @@ async def submit_orchestration(
         raise HTTPException(status_code=400, detail="请至少选择一个待办任务")
 
     orch_id = f"orch-{uuid.uuid4().hex[:8]}"
-    now = utc_now_naive().isoformat()
+    now = utc_now_naive()
 
     result = await db.execute(select(Todo).where(Todo.id.in_(payload.todo_ids)))
     todos = result.scalars().all()
@@ -607,7 +729,11 @@ async def submit_orchestration(
     if not todos:
         raise HTTPException(status_code=400, detail="未找到对应的待办任务")
 
-    user_execution_todos = [todo.title for todo in todos if getattr(todo, "execution_mode", "system") == "user"]
+    user_execution_todos = [
+        todo.title
+        for todo in todos
+        if getattr(todo, "execution_mode", "system") == "user"
+    ]
     if user_execution_todos:
         raise HTTPException(status_code=400, detail="用户执行任务不能提交系统编排")
 
@@ -628,8 +754,8 @@ async def submit_orchestration(
             "priority": t.priority or "medium",
             "status": t.status or "pending",
             "deadline": t.due_date.isoformat() if t.due_date else None,
-            "created_at": t.created_at.isoformat() if t.created_at else now,
-            "updated_at": t.updated_at.isoformat() if t.updated_at else now,
+            "created_at": t.created_at.isoformat() if t.created_at else now.isoformat(),
+            "updated_at": t.updated_at.isoformat() if t.updated_at else now.isoformat(),
             "is_recurring": bool(getattr(t, "is_recurring", False)),
             "recurrence_cron": getattr(t, "recurrence_cron", None),
             "recurrence_count": int(getattr(t, "recurrence_count", 0) or 0),
@@ -640,64 +766,34 @@ async def submit_orchestration(
     summary = build_orchestration_summary(todos)
     recurrence_defaults = _build_recurrence_defaults_from_todos(todos)
 
-    # Update todos status to orchestrating
     for todo in todos:
         todo.status = "orchestrating"
         todo.orchestration_id = orch_id
     await db.flush()
 
-    entry = {
-        "orch_id": orch_id,
-        "summary": summary,
-        "status": "analyzing",
-        "submitted_at": now,
-        "todos": todo_list,
-        "suggested_agent": None,
-        "suggested_wagent": None,
-        "plan": None,
-        "llm_reason": None,
-        "error": None,
-    }
-    _orchestration_store[orch_id] = entry
+    orch = Orchestration(
+        id=orch_id,
+        summary=summary,
+        status="analyzing",
+        submitted_at=now,
+        todos_snapshot=todo_list,
+    )
+    db.add(orch)
+    await db.flush()
 
-    # Commit early to avoid holding SQLite write lock during potentially slow LLM calls.
-    # Without this, rapid consecutive submissions can fail with "database is locked".
+    # Commit early so the frontend can see "analyzing" status immediately,
+    # then run the potentially slow LLM analysis in a background task.
     await db.commit()
 
-    event_status = entry["status"]
-    try:
-        plan_result = await orchestrator.orchestrate(db, payload.todo_ids)
+    _launch_analysis(orch_id, payload.todo_ids, recurrence_defaults)
 
-        if "error" in plan_result:
-            event_status = _mark_analysis_error(entry, plan_result["error"])
-        else:
-            entry["status"] = plan_result.get("status", "pending_confirm")
-            event_status = entry["status"]
-            entry["plan"] = _apply_recurrence_to_plan(plan_result.get("plan"), recurrence_defaults)
-            entry["llm_reason"] = plan_result.get("llm_reason")
-
-            plan = entry.get("plan", {})
-            if plan and plan.get("plan_type") in ("agent",):
-                rec_id = plan.get("recommended_id")
-                rec_name = plan.get("recommended_name", "")
-                entry["suggested_agent"] = {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "agent"} if rec_id else None
-            elif plan and plan.get("plan_type") in ("wagent", "new_wagent"):
-                rec_id = plan.get("recommended_id")
-                rec_name = plan.get("recommended_name", "")
-                entry["suggested_wagent"] = {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "wagent"} if rec_id else None
-            _snapshot_llm_recommendation(entry)
-
-    except Exception as e:
-        logger.error(f"Orchestration failed for {orch_id}: {e}")
-        event_status = _mark_analysis_error(entry, f"编排分析失败: {str(e)}")
-
-    await sync_todos_for_orchestration(db, orch_id, entry)
-    _save_store()
-    await _broadcast_orchestration_complete(orch_id, event_status, entry.get("error"))
     return {
         "code": 200,
         "message": "success",
-        "data": {"orch_id": orch_id, "status": entry["status"], "error": entry.get("error")},
+        "data": {
+            "orch_id": orch_id,
+            "status": "analyzing",
+        },
     }
 
 
@@ -705,35 +801,38 @@ async def submit_orchestration(
 async def list_pending_orchestrations(
     db: AsyncSession = Depends(get_db),
 ):
-    if _prune_cancelled_orchestrations():
-        _save_store()
+    result = await db.execute(
+        select(Orchestration).where(Orchestration.status != "cancelled")
+    )
+    orchestrations = result.scalars().all()
+
     items = []
-    for orch_id, entry in _orchestration_store.items():
-        plan = entry.get("plan") or {}
+    for orch in orchestrations:
+        plan = orch.plan or {}
         rec_name = ""
-        if entry.get("suggested_agent"):
-             rec_name = entry["suggested_agent"]["name"]
-        elif entry.get("suggested_wagent"):
-             rec_name = entry["suggested_wagent"]["name"]
+        if orch.suggested_agent:
+            rec_name = orch.suggested_agent.get("name", "")
+        elif orch.suggested_wagent:
+            rec_name = orch.suggested_wagent.get("name", "")
         elif plan.get("recommended_name"):
-             rec_name = plan.get("recommended_name")
+            rec_name = plan.get("recommended_name")
 
         item = {
-            "orch_id": orch_id,
-            "summary": build_orchestration_summary(entry.get("todos", []), entry.get("summary", "未命名任务")),
-            "todos_count": len(entry.get("todos", [])),
-            "status": entry.get("status", "pending_confirm"),
-            "submitted_at": entry.get("submitted_at"),
-            "error": entry.get("error"),
+            "orch_id": orch.id,
+            "summary": build_orchestration_summary(
+                orch.todos_snapshot or [], orch.summary or "未命名任务"
+            ),
+            "todos_count": len(orch.todos_snapshot or []),
+            "status": orch.status or "pending_confirm",
+            "submitted_at": (
+                orch.submitted_at.isoformat() if orch.submitted_at else None
+            ),
+            "error": orch.error,
             "recommended_name": rec_name,
         }
         items.append(_convert_times_to_beijing(item))
     items.sort(key=lambda x: x.get("submitted_at") or "", reverse=True)
-    return {
-        "code": 200,
-        "message": "success",
-        "data": items,
-    }
+    return {"code": 200, "message": "success", "data": items}
 
 
 @router.get("/{orch_id}")
@@ -741,14 +840,15 @@ async def get_orchestration_detail(
     orch_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    entry = _orchestration_store.get(orch_id)
-    if not entry:
+    orch = await db.get(Orchestration, orch_id)
+    if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
-    _snapshot_llm_recommendation(entry)
+    _snapshot_llm_recommendation(orch)
+    _restore_plan_input_params_from_snapshot(orch)
     return {
         "code": 200,
         "message": "success",
-        "data": _convert_times_to_beijing(entry),
+        "data": _convert_times_to_beijing(orch.to_dict()),
     }
 
 
@@ -758,36 +858,48 @@ async def confirm_orchestration(
     payload: dict | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    entry = _orchestration_store.get(orch_id)
-    if not entry:
+    orch = await db.get(Orchestration, orch_id)
+    if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
-    previous_status = entry.get("status", "pending_confirm")
+    previous_status = orch.status or "pending_confirm"
     if payload:
-        plan = entry.get("plan") or {}
-        plan["input_params"] = payload.get("input_params", plan.get("input_params"))
+        plan = dict(orch.plan or {})
+        incoming_params = payload.get("input_params")
+        plan["input_params"] = (
+            incoming_params if incoming_params else plan.get("input_params", {})
+        )
         plan["priority"] = payload.get("priority", plan.get("priority"))
-        plan["estimated_duration_minutes"] = payload.get("estimated_duration_minutes", plan.get("estimated_duration_minutes"))
-        plan["start_time"] = _normalize_plan_time_value(payload.get("start_time")) or plan.get("start_time")
-        plan["deadline"] = _normalize_plan_time_value(payload.get("deadline")) or plan.get("deadline")
+        plan["estimated_duration_minutes"] = payload.get(
+            "estimated_duration_minutes", plan.get("estimated_duration_minutes")
+        )
+        plan["start_time"] = (
+            _normalize_plan_time_value(payload.get("start_time"))
+            or plan.get("start_time")
+        )
+        plan["deadline"] = (
+            _normalize_plan_time_value(payload.get("deadline"))
+            or plan.get("deadline")
+        )
         if "is_recurring" in payload:
             plan["is_recurring"] = payload.get("is_recurring")
         if "recurrence_cron" in payload:
             plan["recurrence_cron"] = payload.get("recurrence_cron")
         if "recurrence_count" in payload:
             plan["recurrence_count"] = payload.get("recurrence_count")
-        entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
+        orch.plan = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
     else:
-        entry["plan"] = _apply_recurrence_to_plan(entry.get("plan"), _normalize_recurrence_payload(entry.get("plan") or {}))
+        orch.plan = _apply_recurrence_to_plan(
+            orch.plan, _normalize_recurrence_payload(orch.plan or {})
+        )
     try:
-        await ensure_schedule_for_orchestration(db, orch_id, entry)
+        await ensure_schedule_for_orchestration(db, orch_id, orch)
         await rebalance_schedule_tasks(db)
-        await _sync_todo_recurrence_for_orchestration(db, entry)
-        entry["status"] = "confirmed"
-        await sync_todos_for_orchestration(db, orch_id, entry)
-        _save_store()
+        await _sync_todo_recurrence_for_orchestration(db, orch)
+        orch.status = "confirmed"
+        await sync_todos_for_orchestration(db, orch_id)
         return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
     except Exception:
-        entry["status"] = previous_status
+        orch.status = previous_status
         raise
 
 
@@ -797,36 +909,48 @@ async def confirm_wagent(
     payload: dict,
     db: AsyncSession = Depends(get_db),
 ):
-    entry = _orchestration_store.get(orch_id)
-    if not entry:
+    orch = await db.get(Orchestration, orch_id)
+    if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
-    previous_status = entry.get("status", "pending_confirm")
+    previous_status = orch.status or "pending_confirm"
     if payload:
-        plan = entry.get("plan") or {}
-        plan["input_params"] = payload.get("input_params", plan.get("input_params"))
+        plan = dict(orch.plan or {})
+        incoming_params = payload.get("input_params")
+        plan["input_params"] = (
+            incoming_params if incoming_params else plan.get("input_params", {})
+        )
         plan["priority"] = payload.get("priority", plan.get("priority"))
-        plan["estimated_duration_minutes"] = payload.get("estimated_duration_minutes", plan.get("estimated_duration_minutes"))
-        plan["start_time"] = _normalize_plan_time_value(payload.get("start_time")) or plan.get("start_time")
-        plan["deadline"] = _normalize_plan_time_value(payload.get("deadline")) or plan.get("deadline")
+        plan["estimated_duration_minutes"] = payload.get(
+            "estimated_duration_minutes", plan.get("estimated_duration_minutes")
+        )
+        plan["start_time"] = (
+            _normalize_plan_time_value(payload.get("start_time"))
+            or plan.get("start_time")
+        )
+        plan["deadline"] = (
+            _normalize_plan_time_value(payload.get("deadline"))
+            or plan.get("deadline")
+        )
         if "is_recurring" in payload:
             plan["is_recurring"] = payload.get("is_recurring")
         if "recurrence_cron" in payload:
             plan["recurrence_cron"] = payload.get("recurrence_cron")
         if "recurrence_count" in payload:
             plan["recurrence_count"] = payload.get("recurrence_count")
-        entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
+        orch.plan = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
     else:
-        entry["plan"] = _apply_recurrence_to_plan(entry.get("plan"), _normalize_recurrence_payload(entry.get("plan") or {}))
+        orch.plan = _apply_recurrence_to_plan(
+            orch.plan, _normalize_recurrence_payload(orch.plan or {})
+        )
     try:
-        await ensure_schedule_for_orchestration(db, orch_id, entry)
+        await ensure_schedule_for_orchestration(db, orch_id, orch)
         await rebalance_schedule_tasks(db)
-        await _sync_todo_recurrence_for_orchestration(db, entry)
-        entry["status"] = "confirmed"
-        await sync_todos_for_orchestration(db, orch_id, entry)
-        _save_store()
+        await _sync_todo_recurrence_for_orchestration(db, orch)
+        orch.status = "confirmed"
+        await sync_todos_for_orchestration(db, orch_id)
         return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
     except Exception:
-        entry["status"] = previous_status
+        orch.status = previous_status
         raise
 
 
@@ -836,13 +960,17 @@ async def modify_agent(
     payload: dict,
     db: AsyncSession = Depends(get_db),
 ):
-    entry = _orchestration_store.get(orch_id)
-    if not entry:
+    orch = await db.get(Orchestration, orch_id)
+    if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
 
-    _snapshot_llm_recommendation(entry)
+    _snapshot_llm_recommendation(orch)
 
-    plan_type = payload.get("plan_type") or (entry.get("plan") or {}).get("plan_type") or "agent"
+    plan_type = (
+        payload.get("plan_type")
+        or (orch.plan or {}).get("plan_type")
+        or "agent"
+    )
     recommended_id = payload.get("recommended_id")
     selected_name = payload.get("recommended_name")
 
@@ -859,30 +987,37 @@ async def modify_agent(
     else:
         raise HTTPException(status_code=400, detail="不支持的执行器类型")
 
-    _apply_selected_executor(entry, plan_type, recommended_id, selected_name)
+    _apply_selected_executor(orch, plan_type, recommended_id, selected_name)
     if plan_type == "agent":
-        plan = entry.get("plan") or {}
+        plan = dict(orch.plan or {})
         raw_schema = getattr(target, "input_params", {}) if target else {}
-        rebuilt_params, editable_keys = _build_plan_input_params_for_selected_agent(raw_schema or {})
+        rebuilt_params, editable_keys = _build_plan_input_params_for_selected_agent(
+            raw_schema or {}
+        )
         if (
             recommended_id
-            and recommended_id == entry.get("llm_recommended_id")
-            and entry.get("llm_recommended_type") == "agent"
+            and recommended_id == orch.llm_recommended_id
+            and orch.llm_recommended_type == "agent"
         ):
-            llm_snapshot_params = entry.get("llm_recommended_input_params")
+            llm_snapshot_params = orch.llm_recommended_input_params
             if isinstance(llm_snapshot_params, dict) and llm_snapshot_params:
                 if not editable_keys:
                     editable_keys = list(llm_snapshot_params.keys())
-                    rebuilt_params = {key: llm_snapshot_params.get(key) for key in editable_keys}
+                    rebuilt_params = {
+                        key: llm_snapshot_params.get(key) for key in editable_keys
+                    }
                 else:
                     for key in editable_keys:
                         if key in llm_snapshot_params:
                             rebuilt_params[key] = llm_snapshot_params[key]
         plan["editable_input_keys"] = editable_keys
         plan["input_params"] = rebuilt_params
-        entry["plan"] = plan
-    _save_store()
-    return {"code": 200, "message": "success", "data": _convert_times_to_beijing(entry)}
+        orch.plan = plan
+    return {
+        "code": 200,
+        "message": "success",
+        "data": _convert_times_to_beijing(orch.to_dict()),
+    }
 
 
 @router.patch("/{orch_id}/modify-params")
@@ -891,10 +1026,10 @@ async def modify_params(
     payload: dict,
     db: AsyncSession = Depends(get_db),
 ):
-    entry = _orchestration_store.get(orch_id)
-    if not entry:
+    orch = await db.get(Orchestration, orch_id)
+    if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
-    plan = entry.get("plan") or {}
+    plan = dict(orch.plan or {})
     if "input_params" in payload:
         plan["input_params"] = payload["input_params"]
     if "priority" in payload:
@@ -911,9 +1046,12 @@ async def modify_params(
         plan["recurrence_cron"] = payload["recurrence_cron"]
     if "recurrence_count" in payload:
         plan["recurrence_count"] = payload["recurrence_count"]
-    entry["plan"] = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
-    _save_store()
-    return {"code": 200, "message": "success", "data": _convert_times_to_beijing(entry)}
+    orch.plan = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
+    return {
+        "code": 200,
+        "message": "success",
+        "data": _convert_times_to_beijing(orch.to_dict()),
+    }
 
 
 @router.post("/{orch_id}/cancel")
@@ -921,18 +1059,20 @@ async def cancel_orchestration(
     orch_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    entry = _orchestration_store.get(orch_id)
-    if not entry:
+    orch = await db.get(Orchestration, orch_id)
+    if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
 
-    cancelled_entry = dict(entry)
-    cancelled_entry["status"] = "cancelled"
-    await sync_todos_for_orchestration(db, orch_id, cancelled_entry)
+    await sync_todos_for_orchestration(db, orch_id, status_override="cancelled")
     await _cancel_schedule_for_orchestration(db, orch_id)
-    _orchestration_store.pop(orch_id, None)
-    _save_store()
+    await db.delete(orch)
+    await db.flush()
     await _broadcast_orchestration_complete(orch_id, "cancelled", removed=True)
-    return {"code": 200, "message": "success", "data": {"status": "cancelled", "removed": True}}
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {"status": "cancelled", "removed": True},
+    }
 
 
 @router.post("/{orch_id}/retry")
@@ -940,55 +1080,34 @@ async def retry_orchestration(
     orch_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    entry = _orchestration_store.get(orch_id)
-    if not entry:
+    orch = await db.get(Orchestration, orch_id)
+    if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
-    if entry["status"] not in ("pending_confirm", "failed", "cancelled"):
-        raise HTTPException(status_code=400, detail="仅待确认、失败或已取消的编排可以重新编排")
+    if orch.status not in ("pending_confirm", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=400, detail="仅待确认、失败或已取消的编排可以重新编排"
+        )
 
-    todo_ids = [t["id"] for t in entry.get("todos", [])]
+    todo_ids = [t.get("id") for t in (orch.todos_snapshot or []) if t.get("id")]
     if not todo_ids:
         raise HTTPException(status_code=400, detail="编排中没有待办任务")
 
-    entry["status"] = "analyzing"
-    entry["error"] = None
-    entry["plan"] = None
-    entry["llm_reason"] = None
-    entry["suggested_agent"] = None
-    entry["suggested_wagent"] = None
+    orch.status = "analyzing"
+    orch.error = None
+    orch.plan = None
+    orch.llm_reason = None
+    orch.suggested_agent = None
+    orch.suggested_wagent = None
 
-    event_status = entry["status"]
-    try:
-        plan_result = await orchestrator.orchestrate(db, todo_ids)
+    await db.commit()
 
-        if "error" in plan_result:
-            event_status = _mark_analysis_error(entry, plan_result["error"])
-        else:
-            entry["status"] = plan_result.get("status", "pending_confirm")
-            event_status = entry["status"]
-            entry["plan"] = plan_result.get("plan")
-            entry["llm_reason"] = plan_result.get("llm_reason")
+    _launch_analysis(orch_id, todo_ids, _normalize_recurrence_payload(None))
 
-            plan = plan_result.get("plan", {})
-            if plan and plan.get("plan_type") in ("agent",):
-                rec_id = plan.get("recommended_id")
-                rec_name = plan.get("recommended_name", "")
-                entry["suggested_agent"] = {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "agent"} if rec_id else None
-            elif plan and plan.get("plan_type") in ("wagent", "new_wagent"):
-                rec_id = plan.get("recommended_id")
-                rec_name = plan.get("recommended_name", "")
-                entry["suggested_wagent"] = {"id": rec_id, "name": rec_name, "is_enabled": True, "type": "wagent"} if rec_id else None
-            _snapshot_llm_recommendation(entry)
-
-    except Exception as e:
-        logger.error(f"Orchestration retry failed for {orch_id}: {e}")
-        event_status = _mark_analysis_error(entry, f"重新编排失败: {str(e)}")
-
-    await sync_todos_for_orchestration(db, orch_id, entry)
-    _save_store()
-    await _broadcast_orchestration_complete(orch_id, event_status, entry.get("error"))
     return {
         "code": 200,
         "message": "success",
-        "data": {"orch_id": orch_id, "status": entry["status"], "error": entry.get("error")},
+        "data": {
+            "orch_id": orch_id,
+            "status": "analyzing",
+        },
     }

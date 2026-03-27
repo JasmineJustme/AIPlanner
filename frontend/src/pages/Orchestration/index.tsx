@@ -71,6 +71,7 @@ interface OrchestrationDetail {
   llm_recommended_id?: string | null;
   llm_recommended_name?: string | null;
   llm_recommended_type?: 'agent' | 'wagent' | null;
+  llm_recommended_input_params?: Record<string, unknown> | null;
   plan?: {
     plan_type: 'agent' | 'wagent' | 'new_wagent';
     recommended_id?: string;
@@ -131,7 +132,10 @@ function OrchestrationCard({
     setDetail(nextDetail);
     if (!nextDetail) return;
     const plan = nextDetail.plan;
-    const inputParams = plan?.input_params ?? {};
+    const rawParams = plan?.input_params ?? {};
+    const hasParams = Object.keys(rawParams).some((k) => rawParams[k] !== undefined && rawParams[k] !== '' && rawParams[k] !== null);
+    const llmSnapshot = nextDetail.llm_recommended_input_params;
+    const inputParams = hasParams ? rawParams : (llmSnapshot && typeof llmSnapshot === 'object' ? { ...llmSnapshot } : rawParams);
     form.setFieldsValue({
       ...inputParams,
       priority: plan?.priority || 'medium',
@@ -328,6 +332,13 @@ function OrchestrationCard({
     return `循环执行（cron: ${detail.plan.recurrence_cron || '-'}，已执行 ${detail.plan.recurrence_count ?? 0} 次）`;
   };
 
+  const getFallbackWarning = () => {
+    const text = detail?.error || orch.error;
+    if (!text) return '';
+    if (text.includes('LLM') || text.includes('兜底')) return text;
+    return '';
+  };
+
   const statusCfg = STATUS_CONFIG[orch.status] || { color: 'default', text: orch.status, icon: null };
 
   const getHeaderName = () => {
@@ -441,6 +452,15 @@ function OrchestrationCard({
               <Spin tip="加载中..." />
             ) : detail ? (
               <div style={{ paddingTop: 8 }}>
+                {getFallbackWarning() && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="已自动切换为非 LLM 兜底编排计划"
+                    description={getFallbackWarning()}
+                  />
+                )}
                 <div style={{ marginBottom: 12 }}>
                   <Text strong>任务摘要：</Text>
                   <div style={{ marginTop: 4 }}>
@@ -485,6 +505,15 @@ function OrchestrationCard({
             <Spin tip="加载中..." />
           ) : detail ? (
             <div style={{ paddingTop: 8 }}>
+              {getFallbackWarning() && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="已自动切换为非 LLM 兜底编排计划"
+                  description={getFallbackWarning()}
+                />
+              )}
               <div style={{ marginBottom: 16 }}>
                 <Text strong>任务摘要：</Text>
                 <div style={{ marginTop: 4 }}>
@@ -547,13 +576,15 @@ function OrchestrationCard({
 
               <Form form={form} layout="vertical">
                 <Collapse style={{ marginBottom: 16 }}>
-                  <Collapse.Panel header="输入参数" key="input_params">
+                  <Collapse.Panel header="输入参数" key="input_params" forceRender>
                     {(() => {
                       const baseParams = detail.plan?.input_params || {};
+                      const llmParams = detail.llm_recommended_input_params || {};
+                      const effectiveParams = Object.keys(baseParams).length > 0 ? baseParams : llmParams;
                       const editableKeys = detail.plan?.editable_input_keys;
                       const renderKeys = Array.isArray(editableKeys) && editableKeys.length > 0
                         ? editableKeys
-                        : Object.keys(baseParams);
+                        : Object.keys(effectiveParams);
                       if (renderKeys.length === 0) {
                         return <Text type="secondary">该执行器参数由系统自动处理，无需手动填写</Text>;
                       }
@@ -562,8 +593,7 @@ function OrchestrationCard({
                           {renderKeys.map((key) => (
                             <Form.Item key={key} name={key} label={key}>
                               <Input
-                                placeholder={String(baseParams[key] ?? '')}
-                                defaultValue={String(baseParams[key] ?? '')}
+                                placeholder={String(effectiveParams[key] ?? '')}
                               />
                             </Form.Item>
                           ))}
@@ -572,7 +602,7 @@ function OrchestrationCard({
                     })()}
                   </Collapse.Panel>
 
-                  <Collapse.Panel header="调度设置" key="scheduling">
+                  <Collapse.Panel header="调度设置" key="scheduling" forceRender>
                     <Form.Item name="priority" label="优先级">
                       <Select
                         options={Object.entries(PRIORITY_MAP).map(([k, v]) => ({

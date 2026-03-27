@@ -1,0 +1,40 @@
+[
+  {
+    "id": "0192113d-4436-4cd0-89f2-2cd40d787aa9",
+    "plan_name": "推送工作报告",
+    "plan_id": "98851645-9770-4885-9f3f-2504b2fa66dd",
+    "orchestration_id": "orch-c3a786eb",
+    "agent_id": "100e8c5d-d2a2-4b5f-a2dc-e74c4bf27a33",
+    "wagent_id": null,
+    "status": "pending",
+    "priority": "medium",
+    "scheduled_at": "2026-03-10 11:30:00.000000",
+    "started_at": null,
+    "completed_at": null,
+    "retry_count": 0,
+    "max_retries": 3,
+    "dependencies": "[]",
+    "error_message": null,
+    "created_at": "2026-03-10 02:31:27",
+    "updated_at": "2026-03-10 03:29:34"
+  },
+  {
+    "id": "90eb3289-e0a4-4723-a586-de3e94243698",
+    "plan_name": "群发提醒消息",
+    "plan_id": "c5fd346d-ba4b-4f17-8722-1ff6fd0c193a",
+    "orchestration_id": "orch-588e7653",
+    "agent_id": "100e8c5d-d2a2-4b5f-a2dc-e74c4bf27a33",
+    "wagent_id": null,
+    "status": "cancelled",
+    "priority": "medium",
+    "scheduled_at": "2026-03-09 09:30:05.934303",
+    "started_at": null,
+    "completed_at": null,
+    "retry_count": 0,
+    "max_retries": 3,
+    "dependencies": "[]",
+    "error_message": null,
+    "created_at": "2026-03-09 03:44:27",
+    "updated_at": "2026-03-09 09:00:11"
+  }
+]

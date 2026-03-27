@@ -1,0 +1,120 @@
+{
+  "before": {
+    "todos": 4,
+    "status": [
+      [
+        "pending",
+        4
+      ]
+    ],
+    "execution_mode": [
+      [
+        "system",
+        4
+      ]
+    ],
+    "sample": [
+      {
+        "id": "eee97f2e-2122-4f7e-bd56-df2c0b481f20",
+        "title": "群发提醒消息",
+        "status": "pending",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "ac7299c0-7afc-4547-b1a4-f261f43c06ae",
+        "title": "1",
+        "status": "pending",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "6843189e-d40a-4421-a984-91561f2373dc",
+        "title": "1",
+        "status": "pending",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "8748cd68-995f-4c7b-8993-93b0b64948a0",
+        "title": "测试1",
+        "status": "pending",
+        "execution_mode": "system",
+        "orchestration_id": null
+      }
+    ]
+  },
+  "after": {
+    "todos": 8,
+    "status": [
+      [
+        "pending_confirm",
+        8
+      ]
+    ],
+    "execution_mode": [
+      [
+        "system",
+        8
+      ]
+    ],
+    "sample": [
+      {
+        "id": "052a4e26-fe81-48e1-bb83-273931ba458e",
+        "title": "系统测试：自动编排财务审阅任务",
+        "status": "pending_confirm",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "92883c5c-af7d-4fd4-b39e-ddb8fc541e31",
+        "title": "系统测试：自动调度合同检查",
+        "status": "pending_confirm",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "b45025b2-c73d-4e5f-ad21-aa897be195b1",
+        "title": "系统测试：自动生成周报草稿",
+        "status": "pending_confirm",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "302c02aa-60bc-437f-90b6-77d2047d3bb6",
+        "title": "系统测试：同步审计问题清单",
+        "status": "pending_confirm",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "eee97f2e-2122-4f7e-bd56-df2c0b481f20",
+        "title": "群发提醒消息",
+        "status": "pending_confirm",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "ac7299c0-7afc-4547-b1a4-f261f43c06ae",
+        "title": "1",
+        "status": "pending_confirm",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "6843189e-d40a-4421-a984-91561f2373dc",
+        "title": "1",
+        "status": "pending_confirm",
+        "execution_mode": "system",
+        "orchestration_id": null
+      },
+      {
+        "id": "8748cd68-995f-4c7b-8993-93b0b64948a0",
+        "title": "测试1",
+        "status": "pending_confirm",
+        "execution_mode": "system",
+        "orchestration_id": null
+      }
+    ]
+  }
+}

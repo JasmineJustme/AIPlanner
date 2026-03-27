@@ -68,6 +68,7 @@ export interface LLMConfig {
   top_p: number;
   top_p_enabled: boolean;
   max_tokens: number;
+  timeout: number;
   prompt_template: string;
   prompt_version: number;
   total_tokens_used: number;

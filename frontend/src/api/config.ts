@@ -106,13 +106,23 @@ export const deleteResponsibility = (id: string) =>
 
 // Import/Export
 export const exportConfig = () => client.get('/config/export');
+
 export const previewImport = (file: File) => {
   const formData = new FormData();
   formData.append('file', file);
-  return client.post('/config/import/preview', formData);
+  return client.post('/config/import/preview', formData, { timeout: 60000 });
 };
-export const importConfig = (file: File) => {
+export const importConfig = (
+  file: File,
+  options?: { sections?: string[]; mode?: 'merge' | 'replace' },
+) => {
   const formData = new FormData();
   formData.append('file', file);
-  return client.post('/config/import', formData);
+  if (options?.sections?.length) {
+    formData.append('sections', options.sections.join(','));
+  }
+  if (options?.mode) {
+    formData.append('mode', options.mode);
+  }
+  return client.post('/config/import', formData, { timeout: 60000 });
 };

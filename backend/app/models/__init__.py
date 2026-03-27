@@ -15,6 +15,7 @@ from app.models.audit_log import AuditLog
 from app.models.task_queue import TaskQueue
 from app.models.llm_usage_log import LLMUsageLog
 from app.models.responsibility import Responsibility
+from app.models.orchestration import Orchestration
 
 __all__ = [
     "Base",
@@ -38,4 +39,5 @@ __all__ = [
     "TaskQueue",
     "LLMUsageLog",
     "Responsibility",
+    "Orchestration",
 ]

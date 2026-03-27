@@ -1,0 +1,24 @@
+[
+  {
+    "id": "0192113d-4436-4cd0-89f2-2cd40d787aa9",
+    "plan_name": "推送工作报告",
+    "status": "failed",
+    "scheduled_at": "2026-03-10 12:43:57.000000",
+    "started_at": "2026-03-10 12:44:56.000000",
+    "completed_at": "2026-03-10 12:44:57.000000",
+    "error_message": "Client error '404 Not Found' for url 'https://api.dify.ai/v1'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404",
+    "execution_log": null,
+    "updated_at": "2026-03-10 04:44:57"
+  },
+  {
+    "id": "90eb3289-e0a4-4723-a586-de3e94243698",
+    "plan_name": "群发提醒消息",
+    "status": "cancelled",
+    "scheduled_at": "2026-03-09 09:30:05.934303",
+    "started_at": null,
+    "completed_at": null,
+    "error_message": null,
+    "execution_log": null,
+    "updated_at": "2026-03-09 09:00:11"
+  }
+]

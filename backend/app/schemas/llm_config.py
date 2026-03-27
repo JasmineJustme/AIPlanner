@@ -13,6 +13,7 @@ class LLMConfigUpdate(BaseModel):
     top_p: Optional[float] = None
     top_p_enabled: Optional[bool] = None
     max_tokens: Optional[int] = None
+    timeout: Optional[int] = None
     prompt_template: Optional[str] = None
     cost_alert_threshold: Optional[float] = None
 
@@ -30,6 +31,7 @@ class LLMConfigResponse(BaseModel):
     top_p: float = 1.0
     top_p_enabled: bool = True
     max_tokens: int = 4096
+    timeout: int = 180
     prompt_template: str = ""
     cost_alert_threshold: float | None = None
     purpose: str

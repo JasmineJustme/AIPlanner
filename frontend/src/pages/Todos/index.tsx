@@ -35,6 +35,7 @@ import {
   smartDiscoverTodos,
   updateTodo,
 } from '@/api/todos';
+import { getResponsibilities } from '@/api/config';
 import { submitOrchestration } from '@/api/orchestration';
 import type { Todo } from '@/types/todo';
 import PriorityTag from '@/components/PriorityTag';
@@ -100,6 +101,80 @@ export default function TodosPage() {
     status: getStatusFromSearch(location.search),
   });
   const [form] = Form.useForm();
+  const [responsibilityOptions, setResponsibilityOptions] = useState<Array<{ id: string; title: string }>>([]);
+  const [responsibilityIdToTitle, setResponsibilityIdToTitle] = useState<Record<string, string>>({});
+  const [responsibilityTitleToIds, setResponsibilityTitleToIds] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadResponsibilities = async () => {
+      try {
+        const res = await getResponsibilities();
+        // getResponsibilities() 返回结构在前端侧可能未完全类型化，这里用安全解包避免 TS 属性错误。
+        const body = (res as any)?.data as unknown;
+        const payload = typeof body === 'object' && body !== null && 'data' in (body as object) ? (body as any).data : body;
+        const roots = Array.isArray(payload) ? payload : [];
+
+        const flat: Array<{ id: string; title: string }> = [];
+        const idToTitle: Record<string, string> = {};
+        const titleToIds: Record<string, string[]> = {};
+
+        const walk = (nodes: any[]) => {
+          nodes.forEach((n) => {
+            const id = n?.id;
+            const title = n?.title;
+            if (typeof id === 'string' && typeof title === 'string') {
+              flat.push({ id, title });
+              idToTitle[id] = title;
+              titleToIds[title] = titleToIds[title] ?? [];
+              titleToIds[title].push(id);
+            }
+            if (Array.isArray(n?.children) && n.children.length > 0) {
+              walk(n.children);
+            }
+          });
+        };
+
+        walk(roots);
+
+        if (!cancelled) {
+          setResponsibilityOptions(flat);
+          setResponsibilityIdToTitle(idToTitle);
+          setResponsibilityTitleToIds(titleToIds);
+        }
+      } catch {
+        if (!cancelled) {
+          setResponsibilityOptions([]);
+          setResponsibilityIdToTitle({});
+          setResponsibilityTitleToIds({});
+        }
+      }
+    };
+
+    loadResponsibilities();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 如果历史数据只有 responsibility_titles 而没有责任 ids，
+  // 等职责配置加载完成后补全 responsibility_ids，避免编辑时误清空。
+  useEffect(() => {
+    if (!drawerOpen || !editingTodo) return;
+
+    const recordResponsibilityIds = Array.isArray(editingTodo.responsibility_ids) ? editingTodo.responsibility_ids : [];
+    const recordResponsibilityTitles = Array.isArray(editingTodo.responsibility_titles) ? editingTodo.responsibility_titles : [];
+    if (recordResponsibilityIds.length > 0) return;
+    if (recordResponsibilityTitles.length === 0) return;
+
+    const mappedIds = recordResponsibilityTitles
+      .map((t) => responsibilityTitleToIds[t]?.[0])
+      .filter((id): id is string => typeof id === 'string');
+
+    if (mappedIds.length > 0) {
+      form.setFieldsValue({ responsibility_ids: mappedIds });
+    }
+  }, [drawerOpen, editingTodo, responsibilityTitleToIds, form]);
 
   const patchTodo = (todoId: string, updater: (todo: Todo) => Todo) => {
     setData((current) => ({
@@ -178,6 +253,7 @@ export default function TodosPage() {
       is_recurring: false,
       recurrence_count: 0,
       recurrence_cron: undefined,
+      responsibility_ids: [],
     });
     setDrawerOpen(true);
   };
@@ -185,6 +261,14 @@ export default function TodosPage() {
   const openEditDrawer = (record: Todo) => {
     setEditingTodo(record);
     form.resetFields();
+    const recordResponsibilityIds = Array.isArray(record.responsibility_ids) ? record.responsibility_ids : [];
+    const recordResponsibilityTitles = Array.isArray(record.responsibility_titles) ? record.responsibility_titles : [];
+    const selectedByTitles =
+      recordResponsibilityIds.length > 0
+        ? recordResponsibilityIds
+        : recordResponsibilityTitles
+            .map((t) => responsibilityTitleToIds[t]?.[0])
+            .filter((id): id is string => typeof id === 'string');
     form.setFieldsValue({
       title: record.title,
       description: record.description,
@@ -192,7 +276,7 @@ export default function TodosPage() {
       execution_mode: record.execution_mode || TodoExecutionMode.System,
       due_date: record.due_date ? dayjs(record.due_date) : null,
       tags: record.tags ?? [],
-      project: record.project,
+      responsibility_ids: selectedByTitles,
       is_recurring: !!record.is_recurring,
       recurrence_cron: record.recurrence_cron,
       recurrence_count: record.recurrence_count ?? 0,
@@ -204,6 +288,16 @@ export default function TodosPage() {
     setSaving(true);
     try {
       const isRecurring = Boolean(values.is_recurring);
+      const selectedResponsibilityIds = Array.isArray(values.responsibility_ids)
+        ? (values.responsibility_ids as unknown[]).filter((v): v is string => typeof v === 'string')
+        : [];
+      const computedResponsibilityTitles = selectedResponsibilityIds
+        .map((id) => responsibilityIdToTitle[id])
+        .filter((t): t is string => typeof t === 'string');
+      const fallbackResponsibilityTitles =
+        editingTodo && Array.isArray(editingTodo.responsibility_titles)
+          ? editingTodo.responsibility_titles.filter((t): t is string => typeof t === 'string')
+          : [];
       const payload = {
         title: values.title,
         description: values.description,
@@ -211,7 +305,8 @@ export default function TodosPage() {
         execution_mode: values.execution_mode ?? TodoExecutionMode.System,
         due_date: values.due_date ? (values.due_date as { toISOString?: () => string })?.toISOString?.() : undefined,
         tags: Array.isArray(values.tags) ? values.tags : [],
-        project: values.project as string | undefined,
+        responsibility_ids: selectedResponsibilityIds,
+        responsibility_titles: computedResponsibilityTitles.length > 0 ? computedResponsibilityTitles : fallbackResponsibilityTitles,
         is_recurring: isRecurring,
         recurrence_cron: isRecurring ? (values.recurrence_cron as string | undefined) : undefined,
         recurrence_count: isRecurring ? Number(values.recurrence_count ?? 0) : 0,
@@ -431,6 +526,7 @@ export default function TodosPage() {
       title: '标题',
       dataIndex: 'title',
       key: 'title',
+      width: 200,
       ellipsis: true,
       render: (text: string) => <span title={text}>{text}</span>,
     },
@@ -491,6 +587,7 @@ export default function TodosPage() {
       title: '操作',
       key: 'action',
       width: 260,
+      fixed: 'right',
       render: (_, record) => {
         const isUserTodo = isUserExecution(record);
         const pendingLike = isPendingLike(record);
@@ -733,6 +830,7 @@ export default function TodosPage() {
                 columns={columns}
                 dataSource={userTodos}
                 pagination={false}
+                scroll={{ x: 1300 }}
                 locale={{ emptyText: '暂无用户执行任务' }}
                 expandable={{ expandedRowRender: renderExpandedRow }}
               />
@@ -756,6 +854,7 @@ export default function TodosPage() {
                 columns={columns}
                 dataSource={systemTodos}
                 pagination={false}
+                scroll={{ x: 1300 }}
                 locale={{ emptyText: '暂无系统执行任务' }}
                 expandable={{ expandedRowRender: renderExpandedRow }}
               />
@@ -811,8 +910,14 @@ export default function TodosPage() {
           <Form.Item name="tags" label="标签">
             <Select mode="tags" placeholder="输入后回车添加" />
           </Form.Item>
-          <Form.Item name="project" label="项目">
-            <Input placeholder="项目名称" />
+          <Form.Item name="responsibility_ids" label="工作职责">
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="选择工作职责"
+              style={{ width: '100%' }}
+              options={responsibilityOptions.map((r) => ({ value: r.id, label: r.title }))}
+            />
           </Form.Item>
           <Form.Item name="is_recurring" valuePropName="checked">
             <Checkbox>循环执行</Checkbox>

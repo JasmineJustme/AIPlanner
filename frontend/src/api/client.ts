@@ -31,7 +31,12 @@ const client: AxiosInstance = axios.create({
 });
 
 client.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => config,
+  (config: InternalAxiosRequestConfig) => {
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type'];
+    }
+    return config;
+  },
   (error) => Promise.reject(error),
 );
 

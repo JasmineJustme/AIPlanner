@@ -143,7 +143,11 @@ JSON 必须包含以下字段：
             }
         except Exception as e:
             logger.error(f"Orchestration LLM call failed: {e}")
-            return self._create_mock_plan(todos, agents, wagents, workflows)
+            mock = self._create_mock_plan(todos, agents, wagents, workflows)
+            mock["llm_error"] = str(e)
+            if mock.get("llm_reason"):
+                mock["llm_reason"] = f"[LLM 调用失败，已自动回退] {mock['llm_reason']}"
+            return mock
 
     def _render_prompt_template(self, template: str, values: dict[str, str]) -> str:
         rendered = template

@@ -25,7 +25,7 @@ async def get_db() -> AsyncSession:  # type: ignore[misc]
         try:
             yield session
             await session.commit()
-        except Exception:
+        except BaseException:
             await session.rollback()
             raise
         finally:

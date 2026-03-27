@@ -217,13 +217,11 @@ async def cancel_plan(
     orchestration_ids = {task.orchestration_id for task in plan_tasks if task.orchestration_id}
 
     if orchestration_ids:
-        from app.api.orchestration import get_orchestration_entry, sync_todos_for_orchestration, update_orchestration_status
+        from app.api.orchestration import sync_todos_for_orchestration, update_orchestration_status
 
         for orch_id in orchestration_ids:
-            if update_orchestration_status(orch_id, "pending_confirm"):
-                entry = get_orchestration_entry(orch_id)
-                if entry:
-                    await sync_todos_for_orchestration(db, orch_id, entry)
+            if await update_orchestration_status(db, orch_id, "pending_confirm"):
+                await sync_todos_for_orchestration(db, orch_id)
 
     for task in plan_tasks:
         await db.delete(task)
@@ -331,14 +329,13 @@ async def delay_task(
     task.confirm_deadline = None
 
     if task.orchestration_id:
-        from app.api.orchestration import get_orchestration_entry, _normalize_plan_time_value, _save_store
+        from app.api.orchestration import get_orchestration, _normalize_plan_time_value
 
-        entry = get_orchestration_entry(task.orchestration_id)
-        if entry:
-            plan = entry.get("plan") or {}
+        orch = await get_orchestration(db, task.orchestration_id)
+        if orch and orch.plan is not None:
+            plan = dict(orch.plan)
             plan["start_time"] = _normalize_plan_time_value(task.current_scheduled_at.isoformat(), assume_beijing=False)
-            entry["plan"] = plan
-            _save_store()
+            orch.plan = plan
 
     await db.flush()
     return {
@@ -391,14 +388,11 @@ async def cancel_task(
     task.confirm_action = "cancelled"
     task.confirm_deadline = None
 
-    # Update associated items if possible
     if task.orchestration_id:
-        from app.api.orchestration import get_orchestration_entry, sync_todos_for_orchestration, update_orchestration_status
+        from app.api.orchestration import sync_todos_for_orchestration, update_orchestration_status
 
-        if update_orchestration_status(task.orchestration_id, "pending_confirm"):
-            entry = get_orchestration_entry(task.orchestration_id)
-            if entry:
-                await sync_todos_for_orchestration(db, task.orchestration_id, entry)
+        if await update_orchestration_status(db, task.orchestration_id, "pending_confirm"):
+            await sync_todos_for_orchestration(db, task.orchestration_id)
 
     await db.flush()
     return {"code": 200, "message": "success", "data": {"status": "cancelled"}}

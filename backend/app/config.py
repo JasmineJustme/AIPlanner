@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./audit_coworker.db"
     ENCRYPTION_KEY: str = "your-32-byte-key-here"
     LOG_LEVEL: str = "INFO"
+    SSL_VERIFY: bool = True
 
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",

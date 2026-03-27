@@ -14,6 +14,7 @@ class LLMConfig(TimestampMixin, Base):
     temperature: Mapped[float] = mapped_column(Float, default=0.7)
     top_p: Mapped[float] = mapped_column(Float, default=1.0)
     max_tokens: Mapped[int] = mapped_column(Integer, default=4096)
+    timeout: Mapped[int] = mapped_column(Integer, default=180)
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
     prompt_version: Mapped[int] = mapped_column(Integer, default=1)
     total_tokens_used: Mapped[int] = mapped_column(BigInteger, default=0)

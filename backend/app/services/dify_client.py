@@ -1,10 +1,12 @@
 import httpx
 from loguru import logger
 
+from app.config import settings
+
 
 class DifyClient:
     def __init__(self):
-        self._client = httpx.AsyncClient(timeout=300)
+        self._client = httpx.AsyncClient(timeout=300, verify=settings.SSL_VERIFY)
 
     @staticmethod
     def _derive_workflow_run_url(endpoint: str) -> str:
