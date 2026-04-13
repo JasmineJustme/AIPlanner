@@ -42,7 +42,7 @@ class Orchestrator:
             for t in todos
         ])
         agent_desc = "\n".join([
-            f"- ID={a.id}; 名称={a.name}; tags={json.dumps(a.capability_tags or [], ensure_ascii=False)}; 描述={a.description or ''}; input_params={json.dumps(self._filter_prompt_input_params(getattr(a, 'input_params', {})), ensure_ascii=False)}; output_params={json.dumps(a.output_params or {}, ensure_ascii=False)}"
+            f"- ID={a.id}; 名称={a.name}; tags={json.dumps(a.capability_tags or [], ensure_ascii=False)}; 描述={a.description or ''}; input_params={json.dumps(self._filter_prompt_input_params(getattr(a, 'input_params', {})), ensure_ascii=False)}"
             for a in agents
         ]) or "- 无"
         wagent_desc = "\n".join([

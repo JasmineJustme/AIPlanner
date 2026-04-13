@@ -91,6 +91,58 @@ class DifyClient:
         # Fallback: strip last path segment (handles custom non-Dify APIs)
         return url.rsplit("/", 1)[0] + "/parameters"
 
+    @staticmethod
+    def _derive_info_url(endpoint: str) -> str:
+        url = endpoint.rstrip("/")
+        v1_idx = url.find("/v1/")
+        if v1_idx != -1:
+            return url[: v1_idx] + "/v1/info"
+        if url.endswith("/v1"):
+            return url + "/info"
+        return url.rsplit("/", 1)[0] + "/info"
+
+    async def fetch_app_meta(self, endpoint: str, api_key: str) -> dict:
+        """Fetch input parameters (from /parameters) and app info (from /info)."""
+        headers = {"Authorization": f"Bearer {api_key}"}
+        result: dict = {"input_params": [], "name": None, "description": None, "tags": []}
+
+        params_url = self._derive_parameters_url(endpoint)
+        try:
+            resp = await self._client.get(params_url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            user_input_form = data.get("user_input_form", [])
+            for item in user_input_form:
+                if not isinstance(item, dict):
+                    continue
+                for _kind, field in item.items():
+                    if not isinstance(field, dict):
+                        continue
+                    result["input_params"].append({
+                        "name": field.get("variable", ""),
+                        "type": field.get("type", "string"),
+                        "required": field.get("required", False),
+                        "default": field.get("default", ""),
+                        "description": field.get("label", ""),
+                    })
+        except Exception as e:
+            logger.warning(f"Failed to fetch /parameters: {e}")
+
+        info_url = self._derive_info_url(endpoint)
+        try:
+            resp = await self._client.get(info_url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            info = resp.json()
+            result["name"] = info.get("name")
+            result["description"] = info.get("description")
+            tags = info.get("tags", [])
+            if isinstance(tags, list):
+                result["tags"] = tags
+        except Exception as e:
+            logger.warning(f"Failed to fetch /info: {e}")
+
+        return result
+
     async def test_connection(self, endpoint: str, api_key: str) -> dict:
         """Test connectivity to a Dify endpoint.
         Returns {"connected": bool, "status_code": int|None, "error": str|None}

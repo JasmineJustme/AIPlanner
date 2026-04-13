@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +8,22 @@ from app.models import Agent
 from app.schemas.agent import AgentCreate, AgentUpdate, AgentResponse
 
 router = APIRouter(prefix="/config/agents", tags=["config-agents"])
+
+
+class FetchDifyInfoRequest(BaseModel):
+    dify_endpoint: str
+    dify_api_key: str
+
+
+@router.post("/fetch-dify-info")
+async def fetch_dify_info(payload: FetchDifyInfoRequest):
+    from app.services.dify_client import dify_client
+
+    if not payload.dify_endpoint or not payload.dify_api_key:
+        raise HTTPException(status_code=400, detail="请提供 Dify 端点和 API Key")
+
+    meta = await dify_client.fetch_app_meta(payload.dify_endpoint, payload.dify_api_key)
+    return {"code": 200, "message": "success", "data": meta}
 
 
 @router.get("")

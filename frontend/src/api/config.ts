@@ -13,6 +13,8 @@ export const toggleAgent = (id: string) =>
   client.patch(`/config/agents/${id}/toggle`);
 export const testAgent = (id: string) =>
   client.post(`/config/agents/${id}/test`);
+export const fetchDifyInfo = (data: { dify_endpoint: string; dify_api_key: string }) =>
+  client.post('/config/agents/fetch-dify-info', data);
 
 // Workflows
 export const getWorkflows = (params?: { page?: number; size?: number }) =>

@@ -8,7 +8,6 @@ export interface Agent {
   dify_endpoint: string;
   dify_api_key: string;
   input_params: ParamDefinition[];
-  output_params: ParamDefinition[];
   timeout_seconds: number;
   auto_execute: boolean;
   confirm_before_exec: boolean;
