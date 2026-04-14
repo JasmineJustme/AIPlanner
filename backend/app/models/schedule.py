@@ -21,6 +21,10 @@ class ScheduleTask(TimestampMixin, Base):
     plan_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("schedule_plans.id"), nullable=False
     )
+    parent_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("schedule_tasks.id"), nullable=True
+    )
+    is_parent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     orchestration_id: Mapped[str] = mapped_column(String(36), nullable=False)
     agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     wagent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -42,3 +46,6 @@ class ScheduleTask(TimestampMixin, Base):
     confirm_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     confirm_action: Mapped[str | None] = mapped_column(String(20), nullable=True)
     execution_log: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recurrence_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    recurrence_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    recurrence_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -1,6 +1,6 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Body
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -37,6 +37,11 @@ def _task_to_dict(
         "plan_id": t.plan_id,
         "plan_name": plan_name,
         "task_title": task_title,
+        "is_parent": bool(getattr(t, "is_parent", False)),
+        "parent_task_id": getattr(t, "parent_task_id", None),
+        "recurrence_cron": getattr(t, "recurrence_cron", None),
+        "recurrence_limit": int(getattr(t, "recurrence_limit", 0) or 0),
+        "recurrence_done": int(getattr(t, "recurrence_done", 0) or 0),
         "orchestration_id": t.orchestration_id,
         "agent_id": t.agent_id,
         "wagent_id": t.wagent_id,
@@ -237,7 +242,14 @@ async def get_gantt_data(
     plan_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(ScheduleTask).where(ScheduleTask.status != "cancelled").order_by(ScheduleTask.current_scheduled_at)
+    q = (
+        select(ScheduleTask)
+        .where(
+            ScheduleTask.status != "cancelled",
+            or_(ScheduleTask.is_parent.is_(False), ScheduleTask.is_parent.is_(None)),
+        )
+        .order_by(ScheduleTask.current_scheduled_at)
+    )
     if plan_id:
         q = q.where(ScheduleTask.plan_id == plan_id)
     result = await db.execute(q)
@@ -298,7 +310,7 @@ async def confirm_execute(
     task = await db.get(ScheduleTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    task.status = "pending"
+    task.status = "recurring" if bool(getattr(task, "is_parent", False)) else "pending"
     task.confirm_action = "confirmed"
     task.confirm_deadline = None
     await db.flush()
@@ -324,7 +336,7 @@ async def delay_task(
     task.current_scheduled_at = base_time + timedelta(minutes=minutes)
     task.scheduled_at = task.current_scheduled_at
     task.delay_count = int(task.delay_count or 0) + 1
-    task.status = "pending"
+    task.status = "recurring" if bool(getattr(task, "is_parent", False)) else "pending"
     task.confirm_action = "delayed"
     task.confirm_deadline = None
 
@@ -353,15 +365,25 @@ async def run_now_task(
     task = await db.get(ScheduleTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.status not in ("pending", "confirming"):
+    if task.status not in ("pending", "confirming", "running", "recurring"):
         raise HTTPException(status_code=400, detail=f"Cannot run task in '{task.status}' status")
+
+    if getattr(task, "is_parent", False):
+        running_child_result = await db.execute(
+            select(ScheduleTask).where(
+                ScheduleTask.parent_task_id == task.id,
+                ScheduleTask.status == "running",
+            )
+        )
+        if running_child_result.scalars().first() is not None:
+            raise HTTPException(status_code=400, detail="当前有子任务正在执行，无法立即执行")
 
     now = _now_local_naive()
     if task.original_scheduled_at is None:
         task.original_scheduled_at = task.scheduled_at
     task.current_scheduled_at = now
     task.scheduled_at = now
-    task.status = "pending"
+    task.status = "recurring" if bool(getattr(task, "is_parent", False)) else "pending"
     task.confirm_action = "run_now"
     task.confirm_deadline = None
     await db.flush()
@@ -388,14 +410,46 @@ async def cancel_task(
     task.confirm_action = "cancelled"
     task.confirm_deadline = None
 
-    if task.orchestration_id:
-        from app.api.orchestration import sync_todos_for_orchestration, update_orchestration_status
+    if bool(getattr(task, "is_parent", False)):
+        child_result = await db.execute(
+            select(ScheduleTask).where(ScheduleTask.parent_task_id == task.id)
+        )
+        for child in child_result.scalars().all():
+            child.status = "cancelled"
+            child.confirm_action = "cancelled"
+            child.confirm_deadline = None
 
-        if await update_orchestration_status(db, task.orchestration_id, "pending_confirm"):
-            await sync_todos_for_orchestration(db, task.orchestration_id)
+        if task.orchestration_id:
+            from app.api.orchestration import sync_todos_for_orchestration, update_orchestration_status
+
+            if await update_orchestration_status(db, task.orchestration_id, "pending_confirm"):
+                await sync_todos_for_orchestration(db, task.orchestration_id)
+    else:
+        # non-recurring top-level task should also return to orchestration stage
+        if not task.parent_task_id and task.orchestration_id:
+            from app.api.orchestration import sync_todos_for_orchestration, update_orchestration_status
+
+            if await update_orchestration_status(db, task.orchestration_id, "pending_confirm"):
+                await sync_todos_for_orchestration(db, task.orchestration_id)
+
+        parent = await db.get(ScheduleTask, task.parent_task_id) if task.parent_task_id else None
+        if parent and parent.recurrence_cron:
+            from app.utils.recurrence import get_next_run_time
+
+            now = _now_local_naive()
+            base_time = parent.current_scheduled_at or parent.scheduled_at or now
+            try:
+                next_run = get_next_run_time(parent.recurrence_cron, base_time)
+            except Exception:
+                from datetime import timedelta
+                next_run = now + timedelta(minutes=1)
+
+            parent.current_scheduled_at = next_run
+            parent.scheduled_at = next_run
+            parent.status = "recurring"
 
     await db.flush()
-    return {"code": 200, "message": "success", "data": {"status": "cancelled"}}
+    return {"code": 200, "message": "success", "data": {"status": "cancelled", "is_parent": bool(getattr(task, "is_parent", False))}}
 
 
 @router.post("/tasks/{task_id}/retry")

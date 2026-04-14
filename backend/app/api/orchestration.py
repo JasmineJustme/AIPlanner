@@ -18,6 +18,7 @@ from app.utils.timezone import (
     utc_now_naive,
     utc_to_beijing_iso_from_any,
 )
+from app.utils.recurrence import normalize_cron_expression, validate_cron_expression
 from loguru import logger
 
 _background_tasks: set[asyncio.Task] = set()
@@ -208,12 +209,19 @@ def _parse_schedule_datetime(value: str | None) -> datetime:
 def _normalize_recurrence_payload(data: dict | None) -> dict:
     payload = data or {}
     is_recurring = bool(payload.get("is_recurring", False))
-    recurrence_cron = payload.get("recurrence_cron") if is_recurring else None
-    recurrence_count = (
-        int(payload.get("recurrence_count") or 0) if is_recurring else 0
-    )
+    if not is_recurring:
+        return {
+            "is_recurring": False,
+            "recurrence_cron": None,
+            "recurrence_count": 0,
+        }
+
+    recurrence_cron = normalize_cron_expression(payload.get("recurrence_cron"))
+    if not recurrence_cron or not validate_cron_expression(recurrence_cron):
+        raise HTTPException(status_code=400, detail="循环表达式无效，请输入合法 cron")
+    recurrence_count = max(0, int(payload.get("recurrence_count") or 0))
     return {
-        "is_recurring": is_recurring,
+        "is_recurring": True,
         "recurrence_cron": recurrence_cron,
         "recurrence_count": recurrence_count,
     }
@@ -253,19 +261,32 @@ def _apply_recurrence_to_plan(plan: dict | None, defaults: dict) -> dict:
 
 async def _sync_todo_recurrence_for_orchestration(
     db: AsyncSession, orch: Orchestration
-) -> None:
+) -> str | None:
     todo_ids = [
         item.get("id") for item in (orch.todos_snapshot or []) if item.get("id")
     ]
     if not todo_ids:
-        return
+        return None
     normalized = _normalize_recurrence_payload(orch.plan or {})
     result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
-    for todo in result.scalars().all():
+    todos = result.scalars().all()
+
+    mismatch = False
+    for todo in todos:
+        if bool(todo.is_recurring) != normalized["is_recurring"]:
+            mismatch = True
+        if (todo.recurrence_cron or None) != normalized["recurrence_cron"]:
+            mismatch = True
+
+    for todo in todos:
         todo.is_recurring = normalized["is_recurring"]
         todo.recurrence_cron = normalized["recurrence_cron"]
         todo.recurrence_count = normalized["recurrence_count"]
     await db.flush()
+
+    if mismatch:
+        return "检测到待办任务中的循环设置与编排设置不一致，已同步更新待办任务循环设置。"
+    return None
 
 
 async def _cancel_schedule_for_orchestration(
@@ -301,34 +322,25 @@ async def ensure_schedule_for_orchestration(
     db: AsyncSession, orch_id: str, orch: Orchestration
 ) -> None:
     plan_data = orch.plan or {}
-    existing_task_result = await db.execute(
+    recurrence = _normalize_recurrence_payload(plan_data)
+
+    parent_task_result = await db.execute(
         select(ScheduleTask)
         .where(
             ScheduleTask.orchestration_id == orch_id,
+            ScheduleTask.is_parent.is_(True),
             ScheduleTask.status != "cancelled",
         )
         .order_by(ScheduleTask.created_at.desc())
     )
-    schedule_task = existing_task_result.scalars().first()
+    parent_task = parent_task_result.scalars().first()
 
     schedule_plan = None
-    if schedule_task:
-        schedule_plan = await db.get(SchedulePlan, schedule_task.plan_id)
+    if parent_task:
+        schedule_plan = await db.get(SchedulePlan, parent_task.plan_id)
         if schedule_plan and schedule_plan.status == "cancelled":
-            schedule_task = None
+            parent_task = None
             schedule_plan = None
-
-    if schedule_task is None:
-        duplicate_task_result = await db.execute(
-            select(ScheduleTask)
-            .where(
-                ScheduleTask.orchestration_id == orch_id,
-                ScheduleTask.status != "cancelled",
-            )
-            .limit(1)
-        )
-        if duplicate_task_result.scalar_one_or_none() is not None:
-            raise HTTPException(status_code=400, detail="请勿重复提交")
 
     if schedule_plan is None:
         schedule_plan = SchedulePlan(
@@ -348,44 +360,101 @@ async def ensure_schedule_for_orchestration(
         else None
     )
     scheduled_at = _parse_schedule_datetime(plan_data.get("start_time"))
+    recurrence_limit = recurrence["recurrence_count"] if recurrence["is_recurring"] else 1
 
-    if schedule_task is None:
-        schedule_task = ScheduleTask(
-            plan_id=schedule_plan.id,
-            orchestration_id=orch_id,
-            agent_id=agent_id,
-            wagent_id=wagent_id,
-            status="pending",
-            priority=plan_data.get("priority") or "medium",
-            scheduled_at=scheduled_at,
-            original_scheduled_at=scheduled_at,
-            current_scheduled_at=scheduled_at,
-            delay_count=0,
-            input_params=plan_data.get("input_params") or {},
-        )
-        db.add(schedule_task)
+    # recurring orchestration -> parent task container
+    if recurrence["is_recurring"]:
+        if parent_task is None:
+            parent_task = ScheduleTask(
+                plan_id=schedule_plan.id,
+                parent_task_id=None,
+                is_parent=True,
+                orchestration_id=orch_id,
+                agent_id=agent_id,
+                wagent_id=wagent_id,
+                status="recurring",
+                priority=plan_data.get("priority") or "medium",
+                scheduled_at=scheduled_at,
+                original_scheduled_at=scheduled_at,
+                current_scheduled_at=scheduled_at,
+                delay_count=0,
+                input_params=plan_data.get("input_params") or {},
+                recurrence_cron=recurrence["recurrence_cron"],
+                recurrence_limit=recurrence_limit,
+                recurrence_done=0,
+            )
+            db.add(parent_task)
+        else:
+            parent_task.plan_id = schedule_plan.id
+            parent_task.parent_task_id = None
+            parent_task.is_parent = True
+            parent_task.agent_id = agent_id
+            parent_task.wagent_id = wagent_id
+            parent_task.status = "recurring"
+            parent_task.priority = (
+                plan_data.get("priority") or parent_task.priority or "medium"
+            )
+            parent_task.scheduled_at = scheduled_at
+            if parent_task.original_scheduled_at is None:
+                parent_task.original_scheduled_at = scheduled_at
+            parent_task.current_scheduled_at = scheduled_at
+            parent_task.delay_count = 0
+            parent_task.input_params = plan_data.get("input_params") or {}
+            parent_task.error_message = None
+            parent_task.recurrence_cron = recurrence["recurrence_cron"]
+            parent_task.recurrence_limit = recurrence_limit
     else:
-        schedule_task.plan_id = schedule_plan.id
-        schedule_task.agent_id = agent_id
-        schedule_task.wagent_id = wagent_id
-        schedule_task.status = "pending"
-        schedule_task.priority = (
-            plan_data.get("priority") or schedule_task.priority or "medium"
-        )
-        schedule_task.scheduled_at = scheduled_at
-        if schedule_task.original_scheduled_at is None:
-            schedule_task.original_scheduled_at = scheduled_at
-        schedule_task.current_scheduled_at = scheduled_at
-        schedule_task.delay_count = 0
-        schedule_task.input_params = plan_data.get("input_params") or {}
-        schedule_task.error_message = None
+        # non-recurring orchestration -> direct executable task (not parent)
+        if parent_task is None:
+            parent_task = ScheduleTask(
+                plan_id=schedule_plan.id,
+                parent_task_id=None,
+                is_parent=False,
+                orchestration_id=orch_id,
+                agent_id=agent_id,
+                wagent_id=wagent_id,
+                status="pending",
+                priority=plan_data.get("priority") or "medium",
+                scheduled_at=scheduled_at,
+                original_scheduled_at=scheduled_at,
+                current_scheduled_at=scheduled_at,
+                delay_count=0,
+                input_params=plan_data.get("input_params") or {},
+                recurrence_cron=None,
+                recurrence_limit=1,
+                recurrence_done=0,
+            )
+            db.add(parent_task)
+        else:
+            parent_task.plan_id = schedule_plan.id
+            parent_task.parent_task_id = None
+            parent_task.is_parent = False
+            parent_task.agent_id = agent_id
+            parent_task.wagent_id = wagent_id
+            parent_task.status = "pending"
+            parent_task.priority = (
+                plan_data.get("priority") or parent_task.priority or "medium"
+            )
+            parent_task.scheduled_at = scheduled_at
+            if parent_task.original_scheduled_at is None:
+                parent_task.original_scheduled_at = scheduled_at
+            parent_task.current_scheduled_at = scheduled_at
+            parent_task.delay_count = 0
+            parent_task.input_params = plan_data.get("input_params") or {}
+            parent_task.error_message = None
+            parent_task.recurrence_cron = None
+            parent_task.recurrence_limit = 1
+            parent_task.recurrence_done = 0
 
     schedule_plan.name = orch.summary or schedule_plan.name
     schedule_plan.status = "active"
-    recurrence = _normalize_recurrence_payload(plan_data)
     schedule_plan.is_recurring = recurrence["is_recurring"]
     schedule_plan.recurrence_cron = recurrence["recurrence_cron"]
     schedule_plan.recurrence_count = recurrence["recurrence_count"]
+
+    if not recurrence["is_recurring"]:
+        parent_task.recurrence_done = 0
+
     await db.flush()
 
 
@@ -894,10 +963,14 @@ async def confirm_orchestration(
     try:
         await ensure_schedule_for_orchestration(db, orch_id, orch)
         await rebalance_schedule_tasks(db)
-        await _sync_todo_recurrence_for_orchestration(db, orch)
+        recurrence_sync_warning = await _sync_todo_recurrence_for_orchestration(db, orch)
         orch.status = "confirmed"
         await sync_todos_for_orchestration(db, orch_id)
-        return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {"status": "confirmed", "recurrence_sync_warning": recurrence_sync_warning},
+        }
     except Exception:
         orch.status = previous_status
         raise
@@ -945,10 +1018,14 @@ async def confirm_wagent(
     try:
         await ensure_schedule_for_orchestration(db, orch_id, orch)
         await rebalance_schedule_tasks(db)
-        await _sync_todo_recurrence_for_orchestration(db, orch)
+        recurrence_sync_warning = await _sync_todo_recurrence_for_orchestration(db, orch)
         orch.status = "confirmed"
         await sync_todos_for_orchestration(db, orch_id)
-        return {"code": 200, "message": "success", "data": {"status": "confirmed"}}
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {"status": "confirmed", "recurrence_sync_warning": recurrence_sync_warning},
+        }
     except Exception:
         orch.status = previous_status
         raise
@@ -1047,10 +1124,14 @@ async def modify_params(
     if "recurrence_count" in payload:
         plan["recurrence_count"] = payload["recurrence_count"]
     orch.plan = _apply_recurrence_to_plan(plan, _normalize_recurrence_payload(plan))
+    recurrence_sync_warning = await _sync_todo_recurrence_for_orchestration(db, orch)
+    response_data = _convert_times_to_beijing(orch.to_dict())
+    if recurrence_sync_warning:
+        response_data["recurrence_sync_warning"] = recurrence_sync_warning
     return {
         "code": 200,
         "message": "success",
-        "data": _convert_times_to_beijing(orch.to_dict()),
+        "data": response_data,
     }
 
 

@@ -10,6 +10,7 @@ import {
   Form,
   Input,
   InputNumber,
+  TimePicker,
   Select,
   DatePicker,
   Collapse,
@@ -29,6 +30,7 @@ import {
   ClockCircleOutlined,
   CheckCircleOutlined,
   ReloadOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import {
@@ -51,6 +53,83 @@ import { PRIORITY_MAP } from '@/constants/status';
 import { ROUTES } from '@/constants/routes';
 
 const { Title, Text } = Typography;
+
+const RECURRENCE_TYPE_OPTIONS = [
+  { value: 'daily', label: '每日' },
+  { value: 'weekly', label: '每周' },
+  { value: 'monthly', label: '每月' },
+];
+
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: '周日' },
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+];
+
+const MONTH_DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => ({
+  value: i + 1,
+  label: `${i + 1} 日`,
+}));
+
+function parseCronToUi(cron?: string | null): {
+  recurrence_type?: 'daily' | 'weekly' | 'monthly';
+  recurrence_weekdays?: number[];
+  recurrence_month_day?: number;
+  recurrence_time?: dayjs.Dayjs;
+} {
+  if (!cron) return {};
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return {};
+  const [minute, hour, day, _month, weekday] = parts;
+  const h = Number(hour);
+  const m = Number(minute);
+  const recurrence_time = Number.isFinite(h) && Number.isFinite(m)
+    ? dayjs().hour(h).minute(m).second(0)
+    : undefined;
+
+  if (day === '*' && weekday !== '*') {
+    const weekdays = weekday.split(',').map((v) => Number(v)).filter((v) => Number.isInteger(v) && v >= 0 && v <= 6);
+    return { recurrence_type: 'weekly', recurrence_weekdays: weekdays, recurrence_time };
+  }
+  if (day !== '*' && weekday === '*') {
+    const monthDay = Number(day);
+    if (Number.isInteger(monthDay) && monthDay >= 1 && monthDay <= 31) {
+      return { recurrence_type: 'monthly', recurrence_month_day: monthDay, recurrence_time };
+    }
+  }
+  if (day === '*' && weekday === '*') {
+    return { recurrence_type: 'daily', recurrence_time };
+  }
+  return {};
+}
+
+function buildCronFromUi(values: Record<string, unknown>): string | null {
+  const recurrenceType = values.recurrence_type as string | undefined;
+  const time = values.recurrence_time as dayjs.Dayjs | undefined;
+  const hour = dayjs.isDayjs(time) ? time.hour() : 9;
+  const minute = dayjs.isDayjs(time) ? time.minute() : 0;
+
+  if (recurrenceType === 'daily') {
+    return `${minute} ${hour} * * *`;
+  }
+  if (recurrenceType === 'weekly') {
+    const weekdays = Array.isArray(values.recurrence_weekdays)
+      ? (values.recurrence_weekdays as number[]).filter((v) => Number.isInteger(v) && v >= 0 && v <= 6)
+      : [];
+    if (weekdays.length === 0) return null;
+    return `${minute} ${hour} * * ${weekdays.sort((a, b) => a - b).join(',')}`;
+  }
+  if (recurrenceType === 'monthly') {
+    const day = Number(values.recurrence_month_day ?? 1);
+    if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+    return `${minute} ${hour} ${day} * *`;
+  }
+  return null;
+}
 
 interface OrchestrationItem {
   orch_id: string;
@@ -127,6 +206,8 @@ function OrchestrationCard({
   const [agents, setAgents] = useState<Agent[]>([]);
   const [wagents, setWAgents] = useState<WAgent[]>([]);
   const [form] = Form.useForm();
+  const recurrenceType = Form.useWatch('recurrence_type', form) as 'daily' | 'weekly' | 'monthly' | undefined;
+  const isRecurring = Form.useWatch('is_recurring', form) as boolean | undefined;
 
   const applyDetail = useCallback((nextDetail: OrchestrationDetail | null) => {
     setDetail(nextDetail);
@@ -136,6 +217,7 @@ function OrchestrationCard({
     const hasParams = Object.keys(rawParams).some((k) => rawParams[k] !== undefined && rawParams[k] !== '' && rawParams[k] !== null);
     const llmSnapshot = nextDetail.llm_recommended_input_params;
     const inputParams = hasParams ? rawParams : (llmSnapshot && typeof llmSnapshot === 'object' ? { ...llmSnapshot } : rawParams);
+    const recurrenceUi = parseCronToUi(plan?.recurrence_cron);
     form.setFieldsValue({
       ...inputParams,
       priority: plan?.priority || 'medium',
@@ -143,7 +225,10 @@ function OrchestrationCard({
       start_time: plan?.start_time ? dayjs(plan.start_time) : null,
       deadline: plan?.deadline ? dayjs(plan.deadline) : null,
       is_recurring: !!plan?.is_recurring,
-      recurrence_cron: plan?.recurrence_cron || undefined,
+      recurrence_type: recurrenceUi.recurrence_type ?? 'daily',
+      recurrence_time: recurrenceUi.recurrence_time ?? dayjs().hour(9).minute(0).second(0),
+      recurrence_weekdays: recurrenceUi.recurrence_weekdays ?? [1],
+      recurrence_month_day: recurrenceUi.recurrence_month_day ?? 1,
       recurrence_count: plan?.recurrence_count ?? 0,
     });
   }, [form]);
@@ -183,6 +268,25 @@ function OrchestrationCard({
     }
   }, [agentModalOpen]);
 
+  useEffect(() => {
+    if (!isRecurring) return;
+    if (!recurrenceType) return;
+
+    if (recurrenceType === 'weekly') {
+      const current = form.getFieldValue('recurrence_weekdays');
+      if (!Array.isArray(current) || current.length === 0) {
+        form.setFieldValue('recurrence_weekdays', [dayjs().day()]);
+      }
+    }
+
+    if (recurrenceType === 'monthly') {
+      const current = Number(form.getFieldValue('recurrence_month_day'));
+      if (!Number.isInteger(current) || current < 1 || current > 31) {
+        form.setFieldValue('recurrence_month_day', dayjs().date());
+      }
+    }
+  }, [isRecurring, recurrenceType, form]);
+
   const buildInputParams = (values: Record<string, unknown>) => {
     const editableKeys = detail?.plan?.editable_input_keys;
     const fallbackKeys = Object.keys(detail?.plan?.input_params || {});
@@ -201,6 +305,7 @@ function OrchestrationCard({
       const values = form.getFieldsValue();
       const plan = detail.plan;
       const planType = plan?.plan_type || (detail.suggested_wagent ? 'wagent' : 'agent');
+      const resolvedCron = buildCronFromUi(values);
       const payload = {
         input_params: buildInputParams(values),
         priority: values.priority,
@@ -208,13 +313,16 @@ function OrchestrationCard({
         start_time: values.start_time?.toISOString?.(),
         deadline: values.deadline?.toISOString?.(),
         is_recurring: Boolean(values.is_recurring),
-        recurrence_cron: values.is_recurring ? values.recurrence_cron : null,
+        recurrence_cron: values.is_recurring ? resolvedCron : null,
         recurrence_count: values.is_recurring ? Number(values.recurrence_count ?? 0) : 0,
       };
-      if (planType === 'wagent' || planType === 'new_wagent') {
-        await confirmWAgent(orch.orch_id, payload);
-      } else {
-        await confirmOrchestration(orch.orch_id, payload);
+      const res = planType === 'wagent' || planType === 'new_wagent'
+        ? await confirmWAgent(orch.orch_id, payload)
+        : await confirmOrchestration(orch.orch_id, payload);
+      const body = (res as { data: { data?: { recurrence_sync_warning?: string } } }).data;
+      const syncWarning = body?.data?.recurrence_sync_warning;
+      if (syncWarning) {
+        message.warning(syncWarning);
       }
       message.success('已确认执行');
       onRefreshList();
@@ -246,16 +354,22 @@ function OrchestrationCard({
   const handleModifyParams = async () => {
     try {
       const values = form.getFieldsValue();
-      await modifyOrchestrationParams(orch.orch_id, {
+      const resolvedCron = buildCronFromUi(values);
+      const res = await modifyOrchestrationParams(orch.orch_id, {
         input_params: buildInputParams(values),
         priority: values.priority,
         estimated_duration_minutes: values.estimated_duration_minutes,
         start_time: values.start_time?.toISOString?.(),
         deadline: values.deadline?.toISOString?.(),
         is_recurring: Boolean(values.is_recurring),
-        recurrence_cron: values.is_recurring ? values.recurrence_cron : null,
+        recurrence_cron: values.is_recurring ? resolvedCron : null,
         recurrence_count: values.is_recurring ? Number(values.recurrence_count ?? 0) : 0,
       });
+      const body = (res as { data: { data?: { recurrence_sync_warning?: string } } }).data;
+      const syncWarning = body?.data?.recurrence_sync_warning;
+      if (syncWarning) {
+        message.warning(syncWarning);
+      }
       message.success('参数已更新');
     } catch (e) {
       message.error((e as Error).message || '更新失败');
@@ -614,29 +728,53 @@ function OrchestrationCard({
                     <Form.Item name="estimated_duration_minutes" label="预计时长(分钟)">
                       <InputNumber min={1} style={{ width: 120 }} />
                     </Form.Item>
-                    <Form.Item name="start_time" label="开始时间">
-                      <DatePicker showTime style={{ width: '100%' }} />
-                    </Form.Item>
-                    <Form.Item name="deadline" label="截止时间">
-                      <DatePicker showTime style={{ width: '100%' }} />
-                    </Form.Item>
                     <Form.Item name="is_recurring" valuePropName="checked">
                       <Checkbox>循环执行</Checkbox>
                     </Form.Item>
-                    <Form.Item noStyle shouldUpdate={(prev, curr) => prev.is_recurring !== curr.is_recurring}>
+                    <Form.Item noStyle shouldUpdate>
+                      {({ getFieldValue }) => !getFieldValue('is_recurring') ? (
+                        <>
+                          <Form.Item name="start_time" label="开始时间">
+                            <DatePicker showTime style={{ width: '100%' }} />
+                          </Form.Item>
+                          <Form.Item name="deadline" label="截止时间">
+                            <DatePicker showTime style={{ width: '100%' }} />
+                          </Form.Item>
+                        </>
+                      ) : null}
+                    </Form.Item>
+                    <Form.Item noStyle shouldUpdate>
                       {({ getFieldValue }) => {
                         if (!getFieldValue('is_recurring')) return null;
+                        const recurrenceType = getFieldValue('recurrence_type');
                         return (
                           <>
-                            <Form.Item
-                              name="recurrence_cron"
-                              label="循环表达式 (cron)"
-                              rules={[{ required: true, message: '请输入 cron 表达式' }]}
-                            >
-                              <Input placeholder="例如: 0 9 * * 1-5" />
+                            <Form.Item name="recurrence_type" label="循环方式" rules={[{ required: true, message: '请选择循环方式' }]}>
+                              <Select options={RECURRENCE_TYPE_OPTIONS} />
                             </Form.Item>
-                            <Form.Item name="recurrence_count" label="已执行次数">
-                              <InputNumber min={0} style={{ width: 120 }} />
+                            {recurrenceType === 'weekly' && (
+                              <Form.Item
+                                name="recurrence_weekdays"
+                                label="每周几执行"
+                                rules={[{ required: true, message: '请选择每周执行日' }]}
+                              >
+                                <Select mode="multiple" options={WEEKDAY_OPTIONS} />
+                              </Form.Item>
+                            )}
+                            {recurrenceType === 'monthly' && (
+                              <Form.Item
+                                name="recurrence_month_day"
+                                label="每月第几日执行"
+                                rules={[{ required: true, message: '请选择每月执行日' }]}
+                              >
+                                <Select options={MONTH_DAY_OPTIONS} />
+                              </Form.Item>
+                            )}
+                            <Form.Item name="recurrence_time" label="执行时间" rules={[{ required: true, message: '请选择执行时间' }]}>
+                              <TimePicker format="HH:mm" minuteStep={5} style={{ width: 200 }} />
+                            </Form.Item>
+                            <Form.Item name="recurrence_count" label="循环次数（0 = 不限）">
+                              <InputNumber min={0} style={{ width: 200 }} />
                             </Form.Item>
                           </>
                         );

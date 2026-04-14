@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from app.utils.recurrence import normalize_cron_expression, validate_cron_expression
 from sqlalchemy import select, func, or_
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,8 +37,13 @@ def _normalize_recurrence_fields(data: dict) -> dict:
     if not is_recurring:
         normalized["recurrence_cron"] = None
         normalized["recurrence_count"] = 0
-    else:
-        normalized["recurrence_count"] = int(data.get("recurrence_count") or 0)
+        return normalized
+
+    recurrence_cron = normalize_cron_expression(data.get("recurrence_cron"))
+    if not recurrence_cron or not validate_cron_expression(recurrence_cron):
+        raise HTTPException(status_code=400, detail="循环表达式无效，请输入合法 cron")
+    normalized["recurrence_cron"] = recurrence_cron
+    normalized["recurrence_count"] = max(0, int(data.get("recurrence_count") or 0))
     return normalized
 
 

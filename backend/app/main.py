@@ -55,6 +55,26 @@ async def _ensure_sqlite_runtime_schema() -> None:
         for sql in alter_sql:
             await conn.execute(text(sql))
 
+        schedule_info = await conn.execute(text("PRAGMA table_info(schedule_tasks)"))
+        schedule_columns = {row[1] for row in schedule_info.fetchall()}
+        schedule_alter: list[str] = []
+        if "parent_task_id" not in schedule_columns:
+            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN parent_task_id VARCHAR(36)")
+        if "is_parent" not in schedule_columns:
+            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN is_parent BOOLEAN NOT NULL DEFAULT 0")
+        if "recurrence_cron" not in schedule_columns:
+            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN recurrence_cron VARCHAR(100)")
+        if "recurrence_limit" not in schedule_columns:
+            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN recurrence_limit INTEGER NOT NULL DEFAULT 0")
+        if "recurrence_done" not in schedule_columns:
+            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN recurrence_done INTEGER NOT NULL DEFAULT 0")
+
+        for sql in schedule_alter:
+            await conn.execute(text(sql))
+
+        if schedule_alter:
+            logger.warning(f"Applied SQLite compatibility schema updates for schedule_tasks: {len(schedule_alter)} column(s)")
+
         if alter_sql:
             logger.warning(f"Applied SQLite compatibility schema updates for todos: {len(alter_sql)} column(s)")
 

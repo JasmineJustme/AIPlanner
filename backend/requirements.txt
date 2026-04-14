@@ -12,3 +12,4 @@ loguru==0.7.3
 python-multipart==0.0.20
 python-dotenv==1.0.1
 orjson==3.10.15
+croniter==2.0.5

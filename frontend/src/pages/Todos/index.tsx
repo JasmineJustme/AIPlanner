@@ -5,10 +5,12 @@ import {
   Card,
   Checkbox,
   DatePicker,
+  TimePicker,
   Descriptions,
   Drawer,
   Form,
   Input,
+  InputNumber,
   message,
   Pagination,
   Popconfirm,
@@ -69,6 +71,83 @@ const EXECUTION_MODE_OPTIONS = Object.entries(TODO_EXECUTION_MODE_MAP).map(([k, 
   label: v.text,
 }));
 
+const RECURRENCE_TYPE_OPTIONS = [
+  { value: 'daily', label: '每日' },
+  { value: 'weekly', label: '每周' },
+  { value: 'monthly', label: '每月' },
+];
+
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: '周日' },
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+];
+
+const MONTH_DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => ({
+  value: i + 1,
+  label: `${i + 1} 日`,
+}));
+
+function parseCronToUi(cron?: string | null): {
+  recurrence_type?: 'daily' | 'weekly' | 'monthly';
+  recurrence_weekdays?: number[];
+  recurrence_month_day?: number;
+  recurrence_time?: dayjs.Dayjs;
+} {
+  if (!cron) return {};
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return {};
+  const [minute, hour, day, _month, weekday] = parts;
+  const h = Number(hour);
+  const m = Number(minute);
+  const recurrence_time = Number.isFinite(h) && Number.isFinite(m)
+    ? dayjs().hour(h).minute(m).second(0)
+    : undefined;
+
+  if (day === '*' && weekday !== '*') {
+    const weekdays = weekday.split(',').map((v) => Number(v)).filter((v) => Number.isInteger(v) && v >= 0 && v <= 6);
+    return { recurrence_type: 'weekly', recurrence_weekdays: weekdays, recurrence_time };
+  }
+  if (day !== '*' && weekday === '*') {
+    const monthDay = Number(day);
+    if (Number.isInteger(monthDay) && monthDay >= 1 && monthDay <= 31) {
+      return { recurrence_type: 'monthly', recurrence_month_day: monthDay, recurrence_time };
+    }
+  }
+  if (day === '*' && weekday === '*') {
+    return { recurrence_type: 'daily', recurrence_time };
+  }
+  return {};
+}
+
+function buildCronFromUi(values: Record<string, unknown>): string | undefined {
+  const recurrenceType = values.recurrence_type as string | undefined;
+  const time = values.recurrence_time as dayjs.Dayjs | undefined;
+  const hour = dayjs.isDayjs(time) ? time.hour() : 9;
+  const minute = dayjs.isDayjs(time) ? time.minute() : 0;
+
+  if (recurrenceType === 'daily') {
+    return `${minute} ${hour} * * *`;
+  }
+  if (recurrenceType === 'weekly') {
+    const weekdays = Array.isArray(values.recurrence_weekdays)
+      ? (values.recurrence_weekdays as number[]).filter((v) => Number.isInteger(v) && v >= 0 && v <= 6)
+      : [];
+    if (weekdays.length === 0) return undefined;
+    return `${minute} ${hour} * * ${weekdays.sort((a, b) => a - b).join(',')}`;
+  }
+  if (recurrenceType === 'monthly') {
+    const day = Number(values.recurrence_month_day ?? 1);
+    if (!Number.isInteger(day) || day < 1 || day > 31) return undefined;
+    return `${minute} ${hour} ${day} * *`;
+  }
+  return undefined;
+}
+
 function getStatusFromSearch(search: string): string | undefined {
   const status = new URLSearchParams(search).get('status') || undefined;
   if (!status) return undefined;
@@ -101,6 +180,8 @@ export default function TodosPage() {
     status: getStatusFromSearch(location.search),
   });
   const [form] = Form.useForm();
+  const recurrenceType = Form.useWatch('recurrence_type', form) as 'daily' | 'weekly' | 'monthly' | undefined;
+  const isRecurring = Form.useWatch('is_recurring', form) as boolean | undefined;
   const [responsibilityOptions, setResponsibilityOptions] = useState<Array<{ id: string; title: string }>>([]);
   const [responsibilityIdToTitle, setResponsibilityIdToTitle] = useState<Record<string, string>>({});
   const [responsibilityTitleToIds, setResponsibilityTitleToIds] = useState<Record<string, string[]>>({});
@@ -237,6 +318,26 @@ export default function TodosPage() {
     setData((prev) => ({ ...prev, page: 1 }));
   }, [location.search]);
 
+  useEffect(() => {
+    if (!isRecurring) return;
+    if (!recurrenceType) return;
+
+    if (recurrenceType === 'weekly') {
+      const current = form.getFieldValue('recurrence_weekdays');
+      if (!Array.isArray(current) || current.length === 0) {
+        const todayWeekday = dayjs().day();
+        form.setFieldValue('recurrence_weekdays', [todayWeekday]);
+      }
+    }
+
+    if (recurrenceType === 'monthly') {
+      const current = Number(form.getFieldValue('recurrence_month_day'));
+      if (!Number.isInteger(current) || current < 1 || current > 31) {
+        form.setFieldValue('recurrence_month_day', dayjs().date());
+      }
+    }
+  }, [isRecurring, recurrenceType, form]);
+
   const closeDrawer = () => {
     setDrawerOpen(false);
     setEditingTodo(null);
@@ -252,7 +353,10 @@ export default function TodosPage() {
       execution_mode: TodoExecutionMode.System,
       is_recurring: false,
       recurrence_count: 0,
-      recurrence_cron: undefined,
+      recurrence_type: 'daily',
+      recurrence_time: dayjs().hour(9).minute(0).second(0),
+      recurrence_weekdays: [1],
+      recurrence_month_day: 1,
       responsibility_ids: [],
     });
     setDrawerOpen(true);
@@ -269,6 +373,7 @@ export default function TodosPage() {
         : recordResponsibilityTitles
             .map((t) => responsibilityTitleToIds[t]?.[0])
             .filter((id): id is string => typeof id === 'string');
+    const recurrenceUi = parseCronToUi(record.recurrence_cron);
     form.setFieldsValue({
       title: record.title,
       description: record.description,
@@ -278,8 +383,11 @@ export default function TodosPage() {
       tags: record.tags ?? [],
       responsibility_ids: selectedByTitles,
       is_recurring: !!record.is_recurring,
-      recurrence_cron: record.recurrence_cron,
       recurrence_count: record.recurrence_count ?? 0,
+      recurrence_type: recurrenceUi.recurrence_type ?? 'daily',
+      recurrence_time: recurrenceUi.recurrence_time ?? dayjs().hour(9).minute(0).second(0),
+      recurrence_weekdays: recurrenceUi.recurrence_weekdays ?? [1],
+      recurrence_month_day: recurrenceUi.recurrence_month_day ?? 1,
     });
     setDrawerOpen(true);
   };
@@ -298,6 +406,7 @@ export default function TodosPage() {
         editingTodo && Array.isArray(editingTodo.responsibility_titles)
           ? editingTodo.responsibility_titles.filter((t): t is string => typeof t === 'string')
           : [];
+      const resolvedCron = buildCronFromUi(values);
       const payload = {
         title: values.title,
         description: values.description,
@@ -308,7 +417,7 @@ export default function TodosPage() {
         responsibility_ids: selectedResponsibilityIds,
         responsibility_titles: computedResponsibilityTitles.length > 0 ? computedResponsibilityTitles : fallbackResponsibilityTitles,
         is_recurring: isRecurring,
-        recurrence_cron: isRecurring ? (values.recurrence_cron as string | undefined) : undefined,
+        recurrence_cron: isRecurring ? resolvedCron : undefined,
         recurrence_count: isRecurring ? Number(values.recurrence_count ?? 0) : 0,
       };
       if (editingTodo) {
@@ -922,36 +1031,38 @@ export default function TodosPage() {
           <Form.Item name="is_recurring" valuePropName="checked">
             <Checkbox>循环执行</Checkbox>
           </Form.Item>
-          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.is_recurring !== curr.is_recurring}>
+          <Form.Item noStyle shouldUpdate>
             {({ getFieldValue }) => {
               if (!getFieldValue('is_recurring')) return null;
+              const recurrenceType = getFieldValue('recurrence_type');
               return (
                 <>
-                  <Form.Item
-                    name="recurrence_cron"
-                    label={
-                      <Space size={6}>
-                        <span>循环表达式 (cron)</span>
-                        <Tooltip
-                          title={
-                            <div>
-                              <div>格式：分 时 日 月 周</div>
-                              <div>例如：`0 9 * * 1-5` 表示工作日 09:00</div>
-                              <div>`0 15 * * 5` 表示每周五 15:00</div>
-                              <div>`30 8 1 * *` 表示每月 1 日 08:30</div>
-                            </div>
-                          }
-                        >
-                          <QuestionCircleOutlined style={{ color: '#999' }} />
-                        </Tooltip>
-                      </Space>
-                    }
-                    rules={[{ required: true, message: '请输入 cron 表达式' }]}
-                  >
-                    <Input placeholder="例如: 0 9 * * 1-5" />
+                  <Form.Item name="recurrence_type" label="循环方式" rules={[{ required: true, message: '请选择循环方式' }]}>
+                    <Select options={RECURRENCE_TYPE_OPTIONS} />
                   </Form.Item>
-                  <Form.Item name="recurrence_count" label="已执行次数">
-                    <Input type="number" min={0} />
+                  {recurrenceType === 'weekly' && (
+                    <Form.Item
+                      name="recurrence_weekdays"
+                      label="每周几执行"
+                      rules={[{ required: true, message: '请选择每周执行日' }]}
+                    >
+                      <Select mode="multiple" options={WEEKDAY_OPTIONS} />
+                    </Form.Item>
+                  )}
+                  {recurrenceType === 'monthly' && (
+                    <Form.Item
+                      name="recurrence_month_day"
+                      label="每月第几日执行"
+                      rules={[{ required: true, message: '请选择每月执行日' }]}
+                    >
+                      <Select options={MONTH_DAY_OPTIONS} />
+                    </Form.Item>
+                  )}
+                  <Form.Item name="recurrence_time" label="执行时间" rules={[{ required: true, message: '请选择执行时间' }]}>
+                    <TimePicker format="HH:mm" style={{ width: '100%' }} minuteStep={5} />
+                  </Form.Item>
+                  <Form.Item name="recurrence_count" label="循环次数（0 = 不限）">
+                    <InputNumber min={0} style={{ width: '100%' }} />
                   </Form.Item>
                 </>
               );

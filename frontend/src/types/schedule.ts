@@ -15,6 +15,11 @@ export interface ScheduleTask {
   plan_id: string;
   plan_name?: string;
   task_title?: string;
+  is_parent?: boolean;
+  parent_task_id?: string;
+  recurrence_cron?: string;
+  recurrence_limit?: number;
+  recurrence_done?: number;
   orchestration_id: string;
   agent_id?: string;
   wagent_id?: string;
