@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Layout, Menu, Badge, Avatar } from 'antd';
+import { useEffect, useState } from 'react';
+import { Layout, Menu, Badge, Avatar, Dropdown, Button } from 'antd';
 import ConfirmModal from '@/components/ConfirmModal';
 import { useConfirmModal } from '@/hooks/useConfirmModal';
 import {
@@ -7,6 +7,8 @@ import {
   MenuUnfoldOutlined,
   BellOutlined,
   UserOutlined,
+  LogoutOutlined,
+  ToolOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { menuConfig } from '@/constants/menu';
@@ -16,9 +18,18 @@ import { useSSE } from '@/hooks/useSSE';
 import { getUnreadCount } from '@/api/messages';
 import { ROUTES } from '@/constants/routes';
 import SearchBar from '@/components/SearchBar';
+import { useAuthStore } from '@/stores/useAuthStore';
 import styles from './index.module.css';
 
 const { Header, Sider, Content } = Layout;
+
+const adminOnlyMenuItems = [
+  {
+    key: '/admin',
+    icon: <ToolOutlined />,
+    label: '管理员工作台',
+  },
+];
 
 function buildMenuItems(items: typeof menuConfig): any[] {
   return items.map((item) => {
@@ -76,10 +87,11 @@ export default function AppLayout() {
   const { unreadCount, setUnreadCount, incrementUnread } = useNotificationStore();
   const { on, off } = useSSE();
   const confirmModal = useConfirmModal();
-  const [openKeys, setOpenKeys] = useState<string[]>(
-    findOpenKeys(location.pathname),
-  );
+  const currentUser = useAuthStore((s) => s.currentUser);
+  const logout = useAuthStore((s) => s.logout);
+  const [openKeys, setOpenKeys] = useState<string[]>(findOpenKeys(location.pathname));
 
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.is_superuser;
   const selectedKey = location.pathname;
 
   const handleMenuClick = ({ key }: { key: string }) => {
@@ -90,6 +102,11 @@ export default function AppLayout() {
 
   const handleOpenChange = (keys: string[]) => {
     setOpenKeys(keys);
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
   };
 
   useEffect(() => {
@@ -112,6 +129,15 @@ export default function AppLayout() {
       MESSAGE_EVENT_TYPES.forEach((evt) => off(evt, handler));
     };
   }, [on, off, incrementUnread]);
+
+  const userMenu = [
+    {
+      key: 'logout',
+      label: '退出登录',
+      icon: <LogoutOutlined />,
+      onClick: handleLogout,
+    },
+  ];
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -140,10 +166,10 @@ export default function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
-          openKeys={siderCollapsed ? [] : openKeys}
+          openKeys={isAdmin || siderCollapsed ? [] : openKeys}
           onOpenChange={handleOpenChange}
           onClick={handleMenuClick}
-          items={buildMenuItems(menuConfig)}
+          items={isAdmin ? adminOnlyMenuItems : buildMenuItems(menuConfig)}
         />
       </Sider>
       <Layout>
@@ -152,16 +178,22 @@ export default function AppLayout() {
             <span className={styles.siderTrigger} onClick={toggleSider}>
               {siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             </span>
-            <SearchBar />
+            {!isAdmin && <SearchBar />}
           </div>
           <div className={styles.headerRight}>
             <Badge count={unreadCount} size="small">
-              <BellOutlined
-                style={{ fontSize: 18, cursor: 'pointer' }}
-                onClick={() => navigate(ROUTES.MESSAGES)}
-              />
+              <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => navigate(ROUTES.MESSAGES)} />
             </Badge>
-            <Avatar size="small" icon={<UserOutlined />} />
+            <Dropdown
+              menu={{ items: userMenu as any }}
+              trigger={['click']}
+              placement="bottomRight"
+            >
+              <Button type="text" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Avatar size="small" icon={<UserOutlined />} />
+                {!siderCollapsed && <span>{currentUser?.username ?? '用户'}</span>}
+              </Button>
+            </Dropdown>
           </div>
         </Header>
         <Content className={styles.content}>

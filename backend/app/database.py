@@ -6,11 +6,8 @@ engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.LOG_LEVEL == "DEBUG",
     future=True,
-    connect_args=(
-        {"check_same_thread": False, "timeout": 30}
-        if "sqlite" in settings.DATABASE_URL
-        else {}
-    ),
+    pool_pre_ping=True,
+    pool_recycle=3600,
 )
 
 async_session_factory = async_sessionmaker(

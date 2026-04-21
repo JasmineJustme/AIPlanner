@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { message } from 'antd';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 export interface APIResponse<T = unknown> {
   code: number;
@@ -32,6 +33,10 @@ const client: AxiosInstance = axios.create({
 
 client.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    const token = useAuthStore.getState().token || localStorage.getItem('audit_coworker_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
     if (config.data instanceof FormData) {
       delete config.headers['Content-Type'];
     }

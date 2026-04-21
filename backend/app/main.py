@@ -8,13 +8,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
-from sqlalchemy import select, text
+from sqlalchemy import select
 from starlette.responses import FileResponse
 
 from app.api.router import api_router
 from app.config import settings
 from app.database import engine, async_session_factory
 from app.models.base import Base
+from app.models.user import User
+from app.security import hash_password
 
 
 def _resolve_frontend_dist() -> Path | None:
@@ -29,83 +31,6 @@ def _resolve_frontend_dist() -> Path | None:
     if dist.is_dir():
         return dist
     return None
-
-
-async def _ensure_sqlite_runtime_schema() -> None:
-    # Keep old local SQLite files usable even when migrations were not applied.
-    if "sqlite" not in settings.DATABASE_URL:
-        return
-
-    async with engine.begin() as conn:
-        table_info = await conn.execute(text("PRAGMA table_info(todos)"))
-        columns = {row[1] for row in table_info.fetchall()}
-
-        alter_sql: list[str] = []
-        if "execution_mode" not in columns:
-            alter_sql.append("ALTER TABLE todos ADD COLUMN execution_mode VARCHAR(20) NOT NULL DEFAULT 'system'")
-        if "completed_at" not in columns:
-            alter_sql.append("ALTER TABLE todos ADD COLUMN completed_at DATETIME")
-        if "is_recurring" not in columns:
-            alter_sql.append("ALTER TABLE todos ADD COLUMN is_recurring BOOLEAN NOT NULL DEFAULT 0")
-        if "recurrence_cron" not in columns:
-            alter_sql.append("ALTER TABLE todos ADD COLUMN recurrence_cron VARCHAR(100)")
-        if "recurrence_count" not in columns:
-            alter_sql.append("ALTER TABLE todos ADD COLUMN recurrence_count INTEGER NOT NULL DEFAULT 0")
-
-        for sql in alter_sql:
-            await conn.execute(text(sql))
-
-        schedule_info = await conn.execute(text("PRAGMA table_info(schedule_tasks)"))
-        schedule_columns = {row[1] for row in schedule_info.fetchall()}
-        schedule_alter: list[str] = []
-        if "parent_task_id" not in schedule_columns:
-            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN parent_task_id VARCHAR(36)")
-        if "is_parent" not in schedule_columns:
-            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN is_parent BOOLEAN NOT NULL DEFAULT 0")
-        if "recurrence_cron" not in schedule_columns:
-            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN recurrence_cron VARCHAR(100)")
-        if "recurrence_limit" not in schedule_columns:
-            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN recurrence_limit INTEGER NOT NULL DEFAULT 0")
-        if "recurrence_done" not in schedule_columns:
-            schedule_alter.append("ALTER TABLE schedule_tasks ADD COLUMN recurrence_done INTEGER NOT NULL DEFAULT 0")
-
-        for sql in schedule_alter:
-            await conn.execute(text(sql))
-
-        if schedule_alter:
-            logger.warning(f"Applied SQLite compatibility schema updates for schedule_tasks: {len(schedule_alter)} column(s)")
-
-        if alter_sql:
-            logger.warning(f"Applied SQLite compatibility schema updates for todos: {len(alter_sql)} column(s)")
-
-        pref_info = await conn.execute(text("PRAGMA table_info(notification_prefs)"))
-        pref_columns = {row[1] for row in pref_info.fetchall()}
-        if "channel_enabled_map" not in pref_columns:
-            await conn.execute(
-                text("ALTER TABLE notification_prefs ADD COLUMN channel_enabled_map JSON NOT NULL DEFAULT '{}'"),
-            )
-            await conn.execute(
-                text(
-                    """
-                    UPDATE notification_prefs
-                    SET channel_enabled_map =
-                        '{"in_app":' || CASE WHEN in_app_enabled THEN 'true' ELSE 'false' END ||
-                        ',"email_workflow":' || CASE WHEN email_enabled THEN 'true' ELSE 'false' END ||
-                        ',"wechat_workflow":' || CASE WHEN wechat_enabled THEN 'true' ELSE 'false' END ||
-                        '}'
-                    WHERE channel_enabled_map IS NULL OR channel_enabled_map = '{}'
-                    """
-                ),
-            )
-            logger.warning("Applied SQLite compatibility schema update for notification_prefs.channel_enabled_map")
-
-        llm_info = await conn.execute(text("PRAGMA table_info(llm_configs)"))
-        llm_columns = {row[1] for row in llm_info.fetchall()}
-        if "timeout" not in llm_columns:
-            await conn.execute(
-                text("ALTER TABLE llm_configs ADD COLUMN timeout INTEGER NOT NULL DEFAULT 180"),
-            )
-            logger.warning("Applied SQLite compatibility schema update for llm_configs.timeout")
 
 
 async def _migrate_orchestrations_from_json() -> None:
@@ -176,21 +101,35 @@ async def _migrate_orchestrations_from_json() -> None:
             logger.info("No orchestrations to migrate from JSON")
 
 
+async def _bootstrap_admin_user() -> None:
+    async with async_session_factory() as session:
+        result = await session.execute(select(User).where(User.email == settings.BOOTSTRAP_ADMIN_EMAIL))
+        admin = result.scalar_one_or_none()
+        if admin:
+            return
+
+        admin = User(
+            username=settings.BOOTSTRAP_ADMIN_USERNAME,
+            email=settings.BOOTSTRAP_ADMIN_EMAIL,
+            full_name="System Administrator",
+            password_hash=hash_password(settings.BOOTSTRAP_ADMIN_PASSWORD),
+            role="admin",
+            is_active=True,
+            is_superuser=True,
+        )
+        session.add(admin)
+        await session.commit()
+        logger.warning("Bootstrap admin user created. Please change default password immediately.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Audit Coworker backend...")
 
-    # Enable WAL mode for SQLite to handle concurrency better
-    if "sqlite" in settings.DATABASE_URL:
-        async with engine.connect() as conn:
-            await conn.execute(text("PRAGMA journal_mode=WAL;"))
-            await conn.execute(text("PRAGMA synchronous=NORMAL;"))
-            logger.info("SQLite WAL mode enabled.")
-
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    await _ensure_sqlite_runtime_schema()
     await _migrate_orchestrations_from_json()
+    await _bootstrap_admin_user()
     logger.info("Database tables ensured.")
 
     from app.api.orchestration import recover_stale_analyzing_orchestrations

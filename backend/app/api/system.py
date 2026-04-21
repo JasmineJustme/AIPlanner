@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import SystemSetting
+from app.dependencies.auth import get_current_user
+from app.models.user import User
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -13,6 +15,7 @@ INIT_KEY = "system_initialized"
 @router.get("/init-status")
 async def get_init_status(
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == INIT_KEY))
     setting = result.scalar_one_or_none()
@@ -23,6 +26,7 @@ async def get_init_status(
 @router.post("/init-complete")
 async def mark_init_complete(
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == INIT_KEY))
     setting = result.scalar_one_or_none()

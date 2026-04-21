@@ -16,6 +16,8 @@ from app.models.task_queue import TaskQueue
 from app.models.llm_usage_log import LLMUsageLog
 from app.models.responsibility import Responsibility
 from app.models.orchestration import Orchestration
+from app.models.user import User, AuthSession, OrgUnit
+from app.models.org_unit_closure import OrgUnitClosure
 
 __all__ = [
     "Base",
@@ -40,4 +42,8 @@ __all__ = [
     "LLMUsageLog",
     "Responsibility",
     "Orchestration",
+    "User",
+    "AuthSession",
+    "OrgUnit",
+    "OrgUnitClosure",
 ]

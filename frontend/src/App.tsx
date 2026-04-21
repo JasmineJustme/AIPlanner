@@ -1,12 +1,13 @@
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import theme from '@/theme/antdTheme';
 import AppLayout from '@/components/Layout';
-import { lazy, Suspense } from 'react';
-import { Spin } from 'antd';
+import { lazy, Suspense, useEffect } from 'react';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 const SetupPage = lazy(() => import('@/pages/Setup'));
+const LoginPage = lazy(() => import('@/pages/Login'));
 const DashboardPage = lazy(() => import('@/pages/Dashboard'));
 const TodosPage = lazy(() => import('@/pages/Todos'));
 const OrchestrationPage = lazy(() => import('@/pages/Orchestration'));
@@ -24,6 +25,9 @@ const MessagesPage = lazy(() => import('@/pages/Messages'));
 const SettingsPage = lazy(() => import('@/pages/Settings'));
 const SettingsNotificationPrefsPage = lazy(() => import('@/pages/Settings/NotificationPrefs'));
 const AuditLogsPage = lazy(() => import('@/pages/AuditLogs'));
+const AdminPage = lazy(() => import('@/pages/Admin'));
+const AdminUsersPage = lazy(() => import('@/pages/Admin/Users'));
+const AdminOrgUnitsPage = lazy(() => import('@/pages/Admin/OrgUnits'));
 
 function Loading() {
   return (
@@ -33,14 +37,37 @@ function Loading() {
   );
 }
 
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const initialized = useAuthStore((s) => s.initialized);
+  const currentUser = useAuthStore((s) => s.currentUser);
+  const fetchCurrentUser = useAuthStore((s) => s.fetchCurrentUser);
+
+  useEffect(() => {
+    if (!initialized) {
+      fetchCurrentUser();
+    }
+  }, [initialized, fetchCurrentUser]);
+
+  if (!initialized) return <Loading />;
+  if (!currentUser) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <ConfigProvider theme={theme} locale={zhCN}>
       <BrowserRouter>
         <Suspense fallback={<Loading />}>
           <Routes>
+            <Route path="/login" element={<LoginPage />} />
             <Route path="/setup" element={<SetupPage />} />
-            <Route element={<AppLayout />}>
+            <Route
+              element={
+                <AuthGuard>
+                  <AppLayout />
+                </AuthGuard>
+              }
+            >
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<DashboardPage />} />
 
@@ -69,6 +96,9 @@ export default function App() {
               <Route path="/settings/notification-prefs" element={<SettingsNotificationPrefsPage />} />
 
               <Route path="/audit-logs" element={<AuditLogsPage />} />
+              <Route path="/admin" element={<AdminPage />} />
+              <Route path="/admin/users" element={<AdminUsersPage />} />
+              <Route path="/admin/org-units" element={<AdminOrgUnitsPage />} />
             </Route>
           </Routes>
         </Suspense>
