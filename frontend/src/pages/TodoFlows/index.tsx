@@ -51,7 +51,7 @@ export default function TodoFlowsPage() {
     user?.full_name || user?.username || user?.id || '-';
 
   const selectedIdsKey = selectedRowKeys.join(',');
-  const isDepartment = currentUser?.role === 'department' || currentUser?.is_superuser;
+  const isDepartment = currentUser?.org_unit_type === 'department' || currentUser?.is_superuser;
 
   const modeMeta: Record<FlowMode, { title: string; actionText: string; targetLabel: string; emptyTip: string }> = {
     dispatch: {
@@ -173,8 +173,9 @@ export default function TodoFlowsPage() {
       setDetail(null);
       setPreviewOpen(false);
       loadItems();
-    } catch {
-      message.error('批量操作失败');
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } }; message?: string };
+      message.error(err?.response?.data?.detail || err?.message || '批量操作失败');
     } finally {
       setConfirming(false);
     }

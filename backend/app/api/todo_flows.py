@@ -44,8 +44,10 @@ def _is_section_user(user: User) -> bool:
 def _is_target_in_department_scope(current_user: User, target: User) -> bool:
     if not current_user.org_unit_id or not target.org_unit_id:
         return False
+    if current_user.id == target.id:
+        return False
     if target.org_unit_id == current_user.org_unit_id:
-        return True
+        return False
     if target.org_unit and target.org_unit.unit_type == "section" and target.org_unit.parent_id == current_user.org_unit_id:
         return True
     cur = target
@@ -260,7 +262,13 @@ async def batch_action(body: BatchTodoFlowBody, db: AsyncSession = Depends(get_d
     if any((t.creator_id or t.owner_id) != current_user.id for t in todos):
         raise HTTPException(status_code=403, detail="仅支持操作当前账户名下任务")
 
-    target = (await db.execute(select(User).where(User.id == body.target_user_id))).scalar_one_or_none()
+    target = (
+        await db.execute(
+            select(User)
+            .options(selectinload(User.org_unit))
+            .where(User.id == body.target_user_id)
+        )
+    ).scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="目标成员不存在")
     if target.id == current_user.id:
