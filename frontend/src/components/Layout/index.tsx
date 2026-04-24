@@ -92,6 +92,7 @@ export default function AppLayout() {
   const [openKeys, setOpenKeys] = useState<string[]>(findOpenKeys(location.pathname));
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.is_superuser;
+  const canViewDepartmentAgentUsage = currentUser?.is_superuser || currentUser?.org_unit_type === 'department' || currentUser?.role === 'department';
   const selectedKey = location.pathname;
 
   const handleMenuClick = ({ key }: { key: string }) => {
@@ -169,7 +170,7 @@ export default function AppLayout() {
           openKeys={isAdmin || siderCollapsed ? [] : openKeys}
           onOpenChange={handleOpenChange}
           onClick={handleMenuClick}
-          items={isAdmin ? adminOnlyMenuItems : buildMenuItems(menuConfig)}
+          items={isAdmin ? adminOnlyMenuItems : buildMenuItems(menuConfig.filter((item) => item.key !== 'department-agent-usage' || canViewDepartmentAgentUsage))}
         />
       </Sider>
       <Layout>

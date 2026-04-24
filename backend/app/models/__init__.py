@@ -8,6 +8,8 @@ from app.models.llm_config import LLMConfig
 from app.models.schedule import SchedulePlan, ScheduleTask
 from app.models.execution import ExecutionHistory
 from app.models.message import Message
+from app.models.todo_collaboration_request import TodoCollaborationRequest
+from app.models.todo_flow_log import TodoFlowLog
 from app.models.notification_channel import NotificationChannel
 from app.models.notification_pref import NotificationPref, NotificationGlobalPref
 from app.models.settings import SystemSetting
@@ -33,6 +35,8 @@ __all__ = [
     "ScheduleTask",
     "ExecutionHistory",
     "Message",
+    "TodoCollaborationRequest",
+    "TodoFlowLog",
     "NotificationChannel",
     "NotificationPref",
     "NotificationGlobalPref",

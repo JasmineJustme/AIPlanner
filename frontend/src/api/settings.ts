@@ -5,6 +5,9 @@ export const getSettings = () => client.get('/settings');
 export const updateSettings = (settings: Record<string, unknown>) =>
   client.put('/settings', { settings });
 
+export const fetchDifyInfo = (data: { dify_api_key: string; dify_endpoint?: string }) =>
+  client.post('/config/agents/fetch-dify-info', data);
+
 export const getNotificationPrefs = () =>
   client.get('/settings/notification-prefs');
 

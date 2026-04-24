@@ -13,6 +13,9 @@ class MessageResponse(BaseModel):
     status: str
     related_type: str | None = None
     related_id: str | None = None
+    related_request_id: str | None = None
+    recipient_user_id: str | None = None
+    sender_user_id: str | None = None
     action_url: str | None = None
     external_pushed: bool = False
     created_at: datetime

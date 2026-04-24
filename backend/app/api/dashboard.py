@@ -1,45 +1,55 @@
 from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Agent, ExecutionHistory, SchedulePlan, ScheduleTask, Todo
+from app.dependencies.auth import get_current_user
+from app.models import Agent, ExecutionHistory, Orchestration, SchedulePlan, ScheduleTask, Todo, User
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+def _todo_user_filter(current_user: User):
+    return Todo.creator_id == current_user.id
+
+
+def _schedule_user_filter(current_user: User):
+    return Orchestration.user_id == current_user.id
+
+
+def _history_user_filter(current_user: User):
+    return Orchestration.user_id == current_user.id
 
 
 @router.get("/stats")
 async def get_dashboard_stats(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow_start = today_start + timedelta(days=1)
 
-    today_todo_result = await db.execute(
-        select(func.count()).select_from(Todo).where(
-            Todo.execution_mode == "user",
-            Todo.status.in_(["pending_confirm", "pending"]),
-        )
-    )
+    todo_filter = _todo_user_filter(current_user)
+    todo_where = [Todo.execution_mode == "user", Todo.status.in_(["pending_confirm", "pending"]), todo_filter]
+    completed_where = [Todo.status == "completed", Todo.completed_at.is_not(None), Todo.completed_at >= today_start, Todo.completed_at < tomorrow_start, todo_filter]
+    today_todo_result = await db.execute(select(func.count()).select_from(Todo).where(*todo_where))
     pending_confirm_result = await db.execute(
-        select(func.count()).select_from(Todo).where(Todo.status == "pending_confirm")
+        select(func.count()).select_from(Todo).where(Todo.status == "pending_confirm", todo_filter)
     )
     scheduling_result = await db.execute(
-        select(func.count()).select_from(ScheduleTask).where(
-            ScheduleTask.status.in_(["pending", "running", "failed", "blocked"])
-        )
+        select(func.count())
+        .select_from(ScheduleTask)
+        .join(Orchestration, Orchestration.id == ScheduleTask.orchestration_id)
+        .where(ScheduleTask.status.in_(["pending", "running", "failed", "blocked"]), _schedule_user_filter(current_user))
     )
-    today_completed_result = await db.execute(
-        select(func.count()).select_from(Todo).where(
-            Todo.status == "completed",
-            Todo.completed_at.is_not(None),
-            Todo.completed_at >= today_start,
-            Todo.completed_at < tomorrow_start,
-        )
-    )
+    today_completed_result = await db.execute(select(func.count()).select_from(Todo).where(*completed_where))
     failed_result = await db.execute(
-        select(func.count()).select_from(ScheduleTask).where(ScheduleTask.status == "failed")
+        select(func.count())
+        .select_from(ScheduleTask)
+        .join(Orchestration, Orchestration.id == ScheduleTask.orchestration_id)
+        .where(ScheduleTask.status == "failed", _schedule_user_filter(current_user))
     )
 
     return {
@@ -58,12 +68,14 @@ async def get_dashboard_stats(
 @router.get("/next-task")
 async def get_next_task(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     now = datetime.now().replace(microsecond=0)
     result = await db.execute(
         select(ScheduleTask, SchedulePlan.name)
         .join(SchedulePlan, SchedulePlan.id == ScheduleTask.plan_id, isouter=True)
-        .where(ScheduleTask.status == "pending")
+        .join(Orchestration, Orchestration.id == ScheduleTask.orchestration_id)
+        .where(ScheduleTask.status == "pending", _schedule_user_filter(current_user))
     )
     rows = result.all()
 
@@ -113,19 +125,17 @@ async def get_next_task(
 @router.get("/trend")
 async def get_trend(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     start_date = today - timedelta(days=6)
 
     date_str_col = func.date(Todo.completed_at)
+    todo_filter = _todo_user_filter(current_user)
+    where_args = [Todo.status == "completed", Todo.completed_at.is_not(None), Todo.completed_at >= start_date, Todo.completed_at < today + timedelta(days=1), todo_filter]
     result = await db.execute(
         select(date_str_col.label("day"), func.count().label("cnt"))
-        .where(
-            Todo.status == "completed",
-            Todo.completed_at.is_not(None),
-            Todo.completed_at >= start_date,
-            Todo.completed_at < today + timedelta(days=1),
-        )
+        .where(*where_args)
         .group_by(date_str_col)
         .order_by(date_str_col)
     )
@@ -142,14 +152,17 @@ async def get_trend(
 @router.get("/agent-ranking")
 async def get_agent_ranking(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     result = await db.execute(
         select(
             func.coalesce(ExecutionHistory.agent_name, Agent.name).label("name"),
             func.count().label("count"),
         )
+        .select_from(ExecutionHistory)
         .outerjoin(Agent, Agent.id == ExecutionHistory.agent_id)
-        .where(ExecutionHistory.agent_id.is_not(None))
+        .join(Orchestration, Orchestration.id == ExecutionHistory.task_id)
+        .where(ExecutionHistory.agent_id.is_not(None), _history_user_filter(current_user))
         .group_by(func.coalesce(ExecutionHistory.agent_name, Agent.name))
         .order_by(func.count().desc())
         .limit(10)
@@ -161,7 +174,10 @@ async def get_agent_ranking(
     else:
         agent_result = await db.execute(
             select(Agent.name, Agent.call_count)
-            .where(Agent.call_count > 0)
+            .join(ExecutionHistory, ExecutionHistory.agent_id == Agent.id)
+            .join(Orchestration, Orchestration.id == ExecutionHistory.task_id)
+            .where(Agent.call_count > 0, _history_user_filter(current_user))
+            .group_by(Agent.name, Agent.call_count)
             .order_by(Agent.call_count.desc())
             .limit(10)
         )

@@ -1,6 +1,6 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
-import { message } from 'antd';
+import { showMessageError } from '@/utils/antdFeedback';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 export interface APIResponse<T = unknown> {
@@ -20,7 +20,7 @@ const showErrorToast = (text: string) => {
   }
   lastErrorToastText = text;
   lastErrorToastAt = now;
-  message.error(text);
+  showMessageError(text);
 };
 
 const client: AxiosInstance = axios.create({

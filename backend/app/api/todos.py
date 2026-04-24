@@ -7,12 +7,47 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.engine.todo_discovery import todo_discovery_engine
-from app.models import Todo, ScheduleTask
+from app.models import Message, Todo, ScheduleTask, TodoFlowLog
 from app.services.llm_client import LLMServiceError
 from app.utils.timezone import to_utc_naive, utc_now_naive
 from pydantic import BaseModel
 from app.schemas.todo import TodoCreate, TodoUpdate, TodoResponse, TodoReviewConfirm
+
+
+async def _sync_origin_flow_completion(db: AsyncSession, todo: Todo, current_user_id: str | None) -> None:
+    if not todo.original_owner_id or todo.original_owner_id == (todo.owner_id or current_user_id):
+        return
+    if todo.status != "completed":
+        return
+    before_flow_state = todo.last_flow_state
+    todo.last_flow_state = "completed"
+    db.add(
+        Message(
+            type="task_completed",
+            title=todo.title,
+            content=f"目标账户已完成任务：{todo.title}",
+            status="unread",
+            related_type="todo",
+            related_id=todo.id,
+            recipient_user_id=todo.original_owner_id,
+            sender_user_id=current_user_id or todo.owner_id,
+        )
+    )
+    db.add(
+        TodoFlowLog(
+            todo_id=todo.id,
+            action_type="complete",
+            from_user_id=current_user_id or todo.owner_id,
+            to_user_id=todo.original_owner_id,
+            status_before="pending",
+            status_after="completed",
+            flow_state_before=before_flow_state,
+            flow_state_after="completed",
+            remark="目标账户已完成任务，原账户只读状态更新为已完成",
+        )
+    )
 
 
 class BatchIdsBody(BaseModel):
@@ -122,8 +157,11 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
         await db.flush()
 
 
-async def _get_todo_or_404(todo_id: str, db: AsyncSession) -> Todo:
-    result = await db.execute(select(Todo).where(Todo.id == todo_id))
+async def _get_todo_or_404(todo_id: str, db: AsyncSession, current_user=None) -> Todo:
+    query = select(Todo).where(Todo.id == todo_id)
+    if current_user is not None and not getattr(current_user, "is_superuser", False):
+        query = query.where(or_(Todo.creator_id == current_user.id, Todo.owner_id == current_user.id))
+    result = await db.execute(query)
     todo = result.scalar_one_or_none()
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
@@ -139,11 +177,15 @@ async def list_todos(
     source: str | None = Query(None),
     execution_mode: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     await _reconcile_orchestration_todo_statuses(db)
     offset = (page - 1) * size
     q = select(Todo)
     count_q = select(func.count()).select_from(Todo)
+    if not getattr(current_user, "is_superuser", False):
+        q = q.where(Todo.owner_id == current_user.id)
+        count_q = count_q.where(Todo.owner_id == current_user.id)
     if status:
         q = q.where(Todo.status == status)
         count_q = count_q.where(Todo.status == status)
@@ -178,8 +220,10 @@ async def list_todos(
 async def create_todo(
     payload: TodoCreate,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     data = _normalize_todo_time_fields(_normalize_recurrence_fields(payload.model_dump()))
+    creator_id = data.get("creator_id") or getattr(current_user, "id", None)
     todo = Todo(
         title=data["title"],
         description=data.get("description"),
@@ -187,6 +231,13 @@ async def create_todo(
         priority=data.get("priority", "medium"),
         source=data.get("source", "manual"),
         execution_mode=data.get("execution_mode", "system"),
+        creator_id=creator_id,
+        owner_id=data.get("owner_id") or creator_id,
+        original_owner_id=data.get("original_owner_id") or creator_id,
+        target_user_id=data.get("target_user_id"),
+        task_flow_type=data.get("task_flow_type") or ("system_execution" if data.get("execution_mode", "system") == "system" else "user_execution"),
+        last_flow_state=data.get("last_flow_state"),
+        last_flow_type=data.get("last_flow_type"),
         due_date=data.get("due_date"),
         tags=data.get("tags", []),
         responsibility_ids=data.get("responsibility_ids", []),
@@ -207,8 +258,9 @@ async def update_todo(
     todo_id: str,
     payload: TodoUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    todo = await _get_todo_or_404(todo_id, db)
+    todo = await _get_todo_or_404(todo_id, db, current_user)
     data = _normalize_todo_time_fields(payload.model_dump(exclude_unset=True))
 
     if "is_recurring" in data:
@@ -243,8 +295,9 @@ async def update_todo(
 async def complete_todo(
     todo_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    todo = await _get_todo_or_404(todo_id, db)
+    todo = await _get_todo_or_404(todo_id, db, current_user)
     if todo.execution_mode != "user":
         raise HTTPException(status_code=400, detail="仅用户执行任务支持手动完成")
     if todo.status not in {"pending", "pending_confirm"}:
@@ -253,6 +306,7 @@ async def complete_todo(
     todo.status = "completed"
     todo.completed_at = utc_now_naive()
     todo.orchestration_id = None
+    await _sync_origin_flow_completion(db, todo, getattr(current_user, "id", None))
     await db.flush()
     await db.refresh(todo)
     return {"code": 200, "message": "success", "data": TodoResponse.model_validate(todo)}
@@ -262,8 +316,9 @@ async def complete_todo(
 async def confirm_user_todo(
     todo_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    todo = await _get_todo_or_404(todo_id, db)
+    todo = await _get_todo_or_404(todo_id, db, current_user)
     if todo.execution_mode != "user":
         raise HTTPException(status_code=400, detail="仅用户执行任务支持确认")
     if todo.status != "pending_confirm":
@@ -281,8 +336,9 @@ async def confirm_user_todo(
 async def cancel_user_todo(
     todo_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    todo = await _get_todo_or_404(todo_id, db)
+    todo = await _get_todo_or_404(todo_id, db, current_user)
     if todo.execution_mode != "user":
         raise HTTPException(status_code=400, detail="仅用户执行任务支持取消")
     if todo.status != "pending":
@@ -300,8 +356,9 @@ async def cancel_user_todo(
 async def rerun_todo(
     todo_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    todo = await _get_todo_or_404(todo_id, db)
+    todo = await _get_todo_or_404(todo_id, db, current_user)
     if todo.status != "completed":
         raise HTTPException(status_code=400, detail="仅已完成任务支持重新执行")
 
@@ -332,8 +389,9 @@ async def rerun_todo(
 async def delete_todo(
     todo_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    todo = await _get_todo_or_404(todo_id, db)
+    todo = await _get_todo_or_404(todo_id, db, current_user)
     await db.delete(todo)
     return {"code": 200, "message": "success", "data": None}
 
@@ -363,8 +421,9 @@ async def confirm_review(
     todo_id: str,
     payload: TodoReviewConfirm | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    todo = await _get_todo_or_404(todo_id, db)
+    todo = await _get_todo_or_404(todo_id, db, current_user)
     todo.review_status = "confirmed"
     todo.review_reason = None
     if payload:
@@ -380,8 +439,9 @@ async def confirm_review(
 async def reject_review(
     todo_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    todo = await _get_todo_or_404(todo_id, db)
+    todo = await _get_todo_or_404(todo_id, db, current_user)
     todo.review_status = "rejected"
     await db.flush()
     await db.refresh(todo)
@@ -392,9 +452,15 @@ async def reject_review(
 async def batch_confirm_review(
     body: BatchIdsBody,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     todo_ids = body.todo_ids
-    result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
+    if not getattr(current_user, "is_superuser", False):
+        result = await db.execute(
+            select(Todo).where(Todo.id.in_(todo_ids), Todo.creator_id == current_user.id)
+        )
+    else:
+        result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
     items = result.scalars().all()
     for todo in items:
         todo.review_status = "confirmed"
@@ -406,6 +472,7 @@ async def batch_confirm_review(
 async def batch_reject_review(
     body: BatchIdsBody,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     todo_ids = body.todo_ids
     result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
@@ -419,9 +486,12 @@ async def batch_reject_review(
 @router.post("/smart-discover")
 async def smart_discover_todos(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     try:
         data = await todo_discovery_engine.smart_discover(db)
+        if not getattr(current_user, "is_superuser", False):
+            data = {**data, "scope": "current_user"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except LLMServiceError as e:

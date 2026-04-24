@@ -26,6 +26,7 @@ export const ROUTES = {
   CONFIG_NOTIFICATIONS: '/config/notifications',
   CONFIG_IMPORT_EXPORT: '/config/import-export',
   CONFIG_RESPONSIBILITIES: '/config/responsibilities',
+  DEPARTMENT_AGENT_USAGE: '/department-agent-usage',
 
   MESSAGES: '/messages',
 

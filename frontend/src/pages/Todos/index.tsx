@@ -25,7 +25,7 @@ import {
 import { AppstoreOutlined, PlusOutlined, QuestionCircleOutlined, RedoOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   cancelUserTodo,
   confirmUserTodo,
@@ -156,6 +156,7 @@ function getStatusFromSearch(search: string): string | undefined {
 
 export default function TodosPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
@@ -824,8 +825,9 @@ export default function TodosPage() {
     },
   ];
 
-  const userTodos = data.items.filter((item) => getExecutionMode(item) === TodoExecutionMode.User);
-  const systemTodos = data.items.filter((item) => getExecutionMode(item) !== TodoExecutionMode.User);
+  const visibleTodoItems = data.items.filter((item) => !item.last_flow_state || item.owner_id === item.creator_id);
+  const userTodos = visibleTodoItems.filter((item) => getExecutionMode(item) === TodoExecutionMode.User);
+  const systemTodos = visibleTodoItems.filter((item) => getExecutionMode(item) !== TodoExecutionMode.User);
   const showOnlyUserModule = filters.status === TodoStatus.Pending;
   const showOnlySystemModule =
     filters.status === TodoStatus.Orchestrating || filters.status === TodoStatus.Scheduling;
@@ -849,6 +851,9 @@ export default function TodosPage() {
         <Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
             新建待办
+          </Button>
+          <Button onClick={() => navigate('/todo-flows')}>
+            派发与协作
           </Button>
           <Button onClick={handleSmartDiscover} loading={discovering}>
             智能发掘待办

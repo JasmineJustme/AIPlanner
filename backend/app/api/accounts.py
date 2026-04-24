@@ -88,6 +88,7 @@ async def me(current_user: User = Depends(get_current_user)):
         email=current_user.email,
         role=current_user.role,
         org_unit_id=current_user.org_unit_id,
+        org_unit_type=current_user.org_unit.unit_type if current_user.org_unit else None,
         manager_id=current_user.manager_id,
         is_superuser=current_user.is_superuser,
         is_active=current_user.is_active,

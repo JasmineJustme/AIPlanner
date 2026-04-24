@@ -88,6 +88,7 @@ class MeResponse(BaseModel):
     email: str
     role: str
     org_unit_id: str | None = None
+    org_unit_type: str | None = None
     manager_id: str | None = None
     is_superuser: bool
     is_active: bool

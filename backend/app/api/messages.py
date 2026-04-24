@@ -1,11 +1,12 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Message
+from app.dependencies.auth import get_current_user
+from app.models import Message, Todo
 from pydantic import BaseModel
 from app.schemas.message import MessageResponse
 from app.utils.timezone import beijing_to_utc_naive
@@ -27,10 +28,15 @@ async def list_messages(
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     offset = (page - 1) * size
     q = select(Message)
     count_q = select(func.count()).select_from(Message)
+    if not getattr(current_user, "is_superuser", False):
+        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
+        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+        count_q = count_q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
     if status:
         q = q.where(Message.status == status)
         count_q = count_q.where(Message.status == status)
@@ -66,8 +72,13 @@ async def list_messages(
 @router.get("/unread-count")
 async def get_unread_count(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    result = await db.execute(select(func.count()).select_from(Message).where(Message.status == "unread"))
+    q = select(func.count()).select_from(Message).where(Message.status == "unread")
+    if not getattr(current_user, "is_superuser", False):
+        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
+        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+    result = await db.execute(q)
     count = result.scalar() or 0
     return {"code": 200, "message": "success", "data": {"count": count}}
 
@@ -76,8 +87,13 @@ async def get_unread_count(
 async def mark_read(
     message_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    result = await db.execute(select(Message).where(Message.id == message_id))
+    q = select(Message).where(Message.id == message_id)
+    if not getattr(current_user, "is_superuser", False):
+        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
+        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+    result = await db.execute(q)
     msg = result.scalar_one_or_none()
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -91,8 +107,13 @@ async def mark_read(
 async def mark_processed(
     message_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    result = await db.execute(select(Message).where(Message.id == message_id))
+    q = select(Message).where(Message.id == message_id)
+    if not getattr(current_user, "is_superuser", False):
+        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
+        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+    result = await db.execute(q)
     msg = result.scalar_one_or_none()
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -106,9 +127,14 @@ async def mark_processed(
 async def batch_read(
     body: BatchMessageIdsBody,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     message_ids = body.message_ids
-    result = await db.execute(select(Message).where(Message.id.in_(message_ids)))
+    q = select(Message).where(Message.id.in_(message_ids))
+    if not getattr(current_user, "is_superuser", False):
+        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
+        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+    result = await db.execute(q)
     items = result.scalars().all()
     for msg in items:
         msg.status = "read"
@@ -120,9 +146,14 @@ async def batch_read(
 async def batch_delete(
     body: BatchMessageIdsBody,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     message_ids = body.message_ids
-    result = await db.execute(select(Message).where(Message.id.in_(message_ids)))
+    q = select(Message).where(Message.id.in_(message_ids))
+    if not getattr(current_user, "is_superuser", False):
+        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
+        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+    result = await db.execute(q)
     items = result.scalars().all()
     for msg in items:
         await db.delete(msg)

@@ -4,25 +4,39 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Agent
+from app.dependencies.auth import get_current_user
+from app.models import Agent, User, SystemSetting
 from app.schemas.agent import AgentCreate, AgentUpdate, AgentResponse
 
 router = APIRouter(prefix="/config/agents", tags=["config-agents"])
 
 
 class FetchDifyInfoRequest(BaseModel):
-    dify_endpoint: str
     dify_api_key: str
+    dify_endpoint: str | None = None
 
 
 @router.post("/fetch-dify-info")
-async def fetch_dify_info(payload: FetchDifyInfoRequest):
+async def fetch_dify_info(
+    payload: FetchDifyInfoRequest,
+    db: AsyncSession = Depends(get_db),
+):
     from app.services.dify_client import dify_client
 
-    if not payload.dify_endpoint or not payload.dify_api_key:
-        raise HTTPException(status_code=400, detail="请提供 Dify 端点和 API Key")
+    endpoint = (payload.dify_endpoint or "").strip()
+    if not endpoint:
+        result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+        setting = result.scalar_one_or_none()
+        raw = setting.value if setting else None
+        if isinstance(raw, dict):
+            endpoint = str(raw.get("value") or raw.get("endpoint") or "").strip()
+        elif raw is not None:
+            endpoint = str(raw).strip()
 
-    meta = await dify_client.fetch_app_meta(payload.dify_endpoint, payload.dify_api_key)
+    if not endpoint or not payload.dify_api_key:
+        raise HTTPException(status_code=400, detail="请提供系统 Dify 端点和 API Key")
+
+    meta = await dify_client.fetch_app_meta(endpoint, payload.dify_api_key)
     return {"code": 200, "message": "success", "data": meta}
 
 
@@ -31,8 +45,10 @@ async def list_agents(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     offset = (page - 1) * size
+    _ = current_user
     count_result = await db.execute(select(func.count()).select_from(Agent))
     total = count_result.scalar() or 0
     result = await db.execute(
@@ -57,7 +73,9 @@ async def list_agents(
 async def get_agent(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _ = current_user
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
     if not agent:
@@ -69,8 +87,10 @@ async def get_agent(
 async def create_agent(
     payload: AgentCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     data = payload.model_dump()
+    creator_id = data.get("creator_id") or current_user.id
     agent = Agent(
         name=data["name"],
         description=data.get("description"),
@@ -82,6 +102,7 @@ async def create_agent(
         timeout_seconds=data.get("timeout_seconds", 300),
         auto_execute=data.get("auto_execute", False),
         confirm_before_exec=data.get("confirm_before_exec", True),
+        creator_id=creator_id,
     )
     db.add(agent)
     await db.flush()
@@ -94,7 +115,9 @@ async def update_agent(
     agent_id: str,
     payload: AgentUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _ = current_user
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
     if not agent:
@@ -113,7 +136,9 @@ async def update_agent(
 async def delete_agent(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _ = current_user
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
     if not agent:
@@ -126,7 +151,9 @@ async def delete_agent(
 async def toggle_agent(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _ = current_user
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
     if not agent:
@@ -141,7 +168,9 @@ async def toggle_agent(
 async def test_agent(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _ = current_user
     import time
     from app.services.dify_client import dify_client
 

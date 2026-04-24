@@ -13,7 +13,8 @@ import {
   Space,
 } from 'antd';
 import { ArrowLeftOutlined, ImportOutlined } from '@ant-design/icons';
-import { getAgent, createAgent, updateAgent, fetchDifyInfo } from '@/api/config';
+import { getAgent, createAgent, updateAgent } from '@/api/config';
+import { fetchDifyInfo } from '@/api/settings';
 import type { Agent } from '@/types/agent';
 import ParamTable, { type ParamDefinition } from '@/components/ParamTable';
 
@@ -51,7 +52,6 @@ export default function ConfigAgentsDetailPage() {
               name: agent.name,
               description: agent.description ?? '',
               capability_tags: agent.capability_tags ?? [],
-              dify_endpoint: agent.dify_endpoint ?? '',
               dify_api_key: agent.dify_api_key ?? '',
               input_params: normalizeParams(agent.input_params),
 
@@ -66,15 +66,14 @@ export default function ConfigAgentsDetailPage() {
   }, [id, isEdit, form]);
 
   const handleImportFromDify = async () => {
-    const endpoint = form.getFieldValue('dify_endpoint');
     const apiKey = form.getFieldValue('dify_api_key');
-    if (!endpoint || !apiKey) {
-      message.warning('请先填写 Dify 端点和 API Key');
+    if (!apiKey) {
+      message.warning('请先填写 API Key');
       return;
     }
     setImporting(true);
     try {
-      const res = await fetchDifyInfo({ dify_endpoint: endpoint, dify_api_key: apiKey });
+      const res = await fetchDifyInfo({ dify_api_key: apiKey });
       const body = (res as { data: unknown }).data;
       const meta = ((body as { data?: Record<string, unknown> })?.data ?? body) as {
         name?: string;
@@ -98,7 +97,7 @@ export default function ConfigAgentsDetailPage() {
         message.success('导入成功，请确认各项配置');
       }
     } catch {
-      message.error('导入失败，请检查 Dify 端点和 API Key 是否正确');
+      message.error('导入失败，请检查系统 Dify 端点和 API Key 是否正确');
     } finally {
       setImporting(false);
     }
@@ -111,7 +110,6 @@ export default function ConfigAgentsDetailPage() {
         name: values.name,
         description: values.description,
         capability_tags: values.capability_tags,
-        dify_endpoint: values.dify_endpoint,
         dify_api_key: values.dify_api_key,
         input_params: values.input_params,
         timeout_seconds: values.timeout_seconds,
@@ -175,13 +173,6 @@ export default function ConfigAgentsDetailPage() {
           }
         >
           <Form.Item
-            name="dify_endpoint"
-            label="Dify 端点"
-            rules={[{ required: true, message: '请输入 Dify 端点' }]}
-          >
-            <Input placeholder="https://api.dify.ai/v1" />
-          </Form.Item>
-          <Form.Item
             name="dify_api_key"
             label="API Key"
             rules={[{ required: true, message: '请输入 API Key' }]}
@@ -189,7 +180,7 @@ export default function ConfigAgentsDetailPage() {
             <Input.Password placeholder="API Key" />
           </Form.Item>
           <Space style={{ color: '#999', fontSize: 12 }}>
-            填写 Dify 端点和 API Key 后，点击「一键导入」可自动获取名称、描述、标签及输入参数
+            系统 Dify 端点已统一配置在系统设置页，当前仅需填写 API Key 即可导入名称、描述、标签及输入参数
           </Space>
         </Card>
 

@@ -1,17 +1,43 @@
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, exists, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import ExecutionHistory
+from app.dependencies.auth import get_current_user
+from app.models import ExecutionHistory, Todo, User
 from app.utils.timezone import utc_to_beijing_datetime
 
 router = APIRouter(prefix="/history", tags=["history"])
 
 
+async def _history_scope_filter(current_user: User):
+    if getattr(current_user, "is_superuser", False):
+        return None
+    todo_ids_q = select(Todo.id).where(Todo.creator_id == current_user.id)
+    dept_user = bool(current_user.org_unit and current_user.org_unit.unit_type == "department")
+    if not dept_user:
+        return ExecutionHistory.task_id.in_(todo_ids_q)
+
+    # department users can see their own data plus department-wide execution history
+    return or_(
+        ExecutionHistory.task_id.in_(todo_ids_q),
+        exists(
+            select(1)
+            .select_from(Todo)
+            .join(User, User.id == Todo.creator_id)
+            .join(User.org_unit)
+            .where(
+                Todo.id == ExecutionHistory.task_id,
+                User.org_unit_id == current_user.org_unit_id,
+            )
+        ),
+    )
+
+
 @router.get("/export")
 async def export_history(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     return {"code": 200, "message": "success", "data": {"url": "/exports/history.csv"}}
 
@@ -23,10 +49,15 @@ async def list_execution_history(
     status: str | None = Query(None),
     agent_id: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     offset = (page - 1) * size
     q = select(ExecutionHistory)
     count_q = select(func.count()).select_from(ExecutionHistory)
+    scope_filter = await _history_scope_filter(current_user)
+    if scope_filter is not None:
+        q = q.where(scope_filter)
+        count_q = count_q.where(scope_filter)
     if status:
         q = q.where(ExecutionHistory.status == status)
         count_q = count_q.where(ExecutionHistory.status == status)
@@ -72,8 +103,13 @@ async def list_execution_history(
 async def get_history_detail(
     history_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    result = await db.execute(select(ExecutionHistory).where(ExecutionHistory.id == history_id))
+    q = select(ExecutionHistory).where(ExecutionHistory.id == history_id)
+    scope_filter = await _history_scope_filter(current_user)
+    if scope_filter is not None:
+        q = q.where(scope_filter)
+    result = await db.execute(q)
     h = result.scalar_one_or_none()
     if not h:
         from fastapi import HTTPException

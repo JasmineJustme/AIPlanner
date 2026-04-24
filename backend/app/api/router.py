@@ -11,7 +11,9 @@ from app.api.config_responsibilities import router as config_responsibilities_ro
 from app.api.accounts import router as accounts_router
 from app.api.system import router as system_router
 from app.api.todos import router as todos_router
+from app.api.todo_flows import router as todo_flows_router
 from app.api.messages import router as messages_router
+from app.api.department_agent_usage import router as department_agent_usage_router
 from app.api.settings import router as settings_router
 from app.api.dashboard import router as dashboard_router
 from app.api.history import router as history_router
@@ -35,7 +37,9 @@ api_router.include_router(config_responsibilities_router)
 api_router.include_router(accounts_router)
 api_router.include_router(system_router)
 api_router.include_router(todos_router)
+api_router.include_router(todo_flows_router)
 api_router.include_router(messages_router)
+api_router.include_router(department_agent_usage_router)
 api_router.include_router(settings_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(history_router)

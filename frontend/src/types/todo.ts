@@ -7,6 +7,12 @@ export interface Todo {
   source: string;
   execution_mode: string;
   source_ref?: string;
+  owner_id?: string;
+  original_owner_id?: string;
+  target_user_id?: string;
+  task_flow_type?: string;
+  last_flow_state?: string | null;
+  last_flow_type?: string | null;
   due_date?: string;
   completed_at?: string;
   tags: string[];

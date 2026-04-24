@@ -1,6 +1,7 @@
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.database import get_db
 from app.models.user import AuthSession, User
@@ -20,7 +21,12 @@ def _extract_bearer_token(authorization: str | None) -> str:
 async def get_current_user(authorization: str | None = Header(default=None), db: AsyncSession = Depends(get_db)) -> User:
     token = _extract_bearer_token(authorization)
     token_hash = hash_token(token)
-    result = await db.execute(select(AuthSession, User).join(User, User.id == AuthSession.user_id).where(AuthSession.token_hash == token_hash))
+    result = await db.execute(
+        select(AuthSession, User)
+        .join(User, User.id == AuthSession.user_id)
+        .options(joinedload(User.org_unit))
+        .where(AuthSession.token_hash == token_hash)
+    )
     row = result.first()
     if not row:
         raise HTTPException(status_code=401, detail="登录状态已失效")

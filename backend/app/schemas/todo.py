@@ -10,6 +10,13 @@ class TodoCreate(BaseModel):
     priority: str = "medium"
     source: str = "manual"
     execution_mode: str = "system"
+    creator_id: str | None = None
+    owner_id: str | None = None
+    original_owner_id: str | None = None
+    target_user_id: str | None = None
+    task_flow_type: str = "user_execution"
+    last_flow_state: str | None = None
+    last_flow_type: str | None = None
     due_date: datetime | None = None
     completed_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
@@ -27,6 +34,13 @@ class TodoUpdate(BaseModel):
     priority: Optional[str] = None
     source: Optional[str] = None
     execution_mode: Optional[str] = None
+    creator_id: Optional[str] = None
+    owner_id: Optional[str] = None
+    original_owner_id: Optional[str] = None
+    target_user_id: Optional[str] = None
+    task_flow_type: Optional[str] = None
+    last_flow_state: Optional[str] = None
+    last_flow_type: Optional[str] = None
     due_date: Optional[datetime] = None
     tags: Optional[list[str]] = None
     responsibility_ids: Optional[list[str]] = None
@@ -46,6 +60,12 @@ class TodoResponse(BaseModel):
     priority: str = "medium"
     source: str = "manual"
     execution_mode: str = "system"
+    owner_id: str | None = None
+    original_owner_id: str | None = None
+    target_user_id: str | None = None
+    task_flow_type: str = "user_execution"
+    last_flow_state: str | None = None
+    last_flow_type: str | None = None
     due_date: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     responsibility_ids: list[str] = Field(default_factory=list)

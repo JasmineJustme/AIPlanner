@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 from starlette.responses import FileResponse
 
 from app.api.router import api_router
@@ -101,6 +101,37 @@ async def _migrate_orchestrations_from_json() -> None:
             logger.info("No orchestrations to migrate from JSON")
 
 
+async def _ensure_runtime_schema_updates() -> None:
+    def _apply(sync_conn):
+        inspector = inspect(sync_conn)
+
+        todo_columns = {col["name"] for col in inspector.get_columns("todos")}
+        todo_additions = [
+            ("owner_id", "ALTER TABLE todos ADD COLUMN owner_id VARCHAR(36) NULL"),
+            ("original_owner_id", "ALTER TABLE todos ADD COLUMN original_owner_id VARCHAR(36) NULL"),
+            ("target_user_id", "ALTER TABLE todos ADD COLUMN target_user_id VARCHAR(36) NULL"),
+            ("task_flow_type", "ALTER TABLE todos ADD COLUMN task_flow_type VARCHAR(30) NOT NULL DEFAULT 'user_execution'"),
+            ("last_flow_state", "ALTER TABLE todos ADD COLUMN last_flow_state VARCHAR(20) NULL"),
+            ("last_flow_type", "ALTER TABLE todos ADD COLUMN last_flow_type VARCHAR(40) NULL"),
+        ]
+        for name, sql in todo_additions:
+            if name not in todo_columns:
+                sync_conn.execute(text(sql))
+
+        message_columns = {col["name"] for col in inspector.get_columns("messages")}
+        message_additions = [
+            ("related_request_id", "ALTER TABLE messages ADD COLUMN related_request_id VARCHAR(36) NULL"),
+            ("recipient_user_id", "ALTER TABLE messages ADD COLUMN recipient_user_id VARCHAR(36) NULL"),
+            ("sender_user_id", "ALTER TABLE messages ADD COLUMN sender_user_id VARCHAR(36) NULL"),
+        ]
+        for name, sql in message_additions:
+            if name not in message_columns:
+                sync_conn.execute(text(sql))
+
+    async with engine.begin() as conn:
+        await conn.run_sync(_apply)
+
+
 async def _bootstrap_admin_user() -> None:
     async with async_session_factory() as session:
         result = await session.execute(select(User).where(User.email == settings.BOOTSTRAP_ADMIN_EMAIL))
@@ -128,6 +159,7 @@ async def lifespan(app: FastAPI):
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await _ensure_runtime_schema_updates()
     await _migrate_orchestrations_from_json()
     await _bootstrap_admin_user()
     logger.info("Database tables ensured.")

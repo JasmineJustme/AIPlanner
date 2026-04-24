@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Card, Form, Input, Typography, message, Space } from 'antd';
+import { App, Button, Card, Form, Input, Typography, Space } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { ROUTES } from '@/constants/routes';
@@ -10,6 +10,7 @@ export default function LoginPage() {
   const [mode, setMode] = useState<'user' | 'admin'>('user');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const { message } = App.useApp();
   const login = useAuthStore((s) => s.login);
   const currentUser = useAuthStore((s) => s.currentUser);
 

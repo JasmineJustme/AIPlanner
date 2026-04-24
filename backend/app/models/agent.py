@@ -19,3 +19,4 @@ class Agent(TimestampMixin, Base):
     is_enabled: Mapped[bool] = mapped_column(default=True)
     call_count: Mapped[int] = mapped_column(default=0)
     success_count: Mapped[int] = mapped_column(default=0)
+    creator_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)

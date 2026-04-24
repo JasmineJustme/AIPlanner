@@ -3,6 +3,7 @@ import {
   Card,
   Form,
   Descriptions,
+  Input,
   InputNumber,
   TimePicker,
   Switch,
@@ -57,6 +58,7 @@ export default function SettingsPage() {
         auto_smart_discovery_enabled: get('auto_smart_discovery_enabled', false),
         auto_smart_discovery_interval_minutes: get('auto_smart_discovery_interval_minutes', 15),
         data_retention_days: get('data_retention_days', 365),
+        dify_endpoint: get('dify_endpoint', ''),
       });
 
       const initVal = raw['system_initialized'];
@@ -91,6 +93,7 @@ export default function SettingsPage() {
         auto_smart_discovery_enabled: values.auto_smart_discovery_enabled,
         auto_smart_discovery_interval_minutes: values.auto_smart_discovery_interval_minutes,
         data_retention_days: values.data_retention_days,
+        dify_endpoint: values.dify_endpoint,
       };
       await updateSettings(payload);
       message.success('保存成功');
@@ -163,6 +166,9 @@ export default function SettingsPage() {
         </Card>
 
         <Card title="系统" style={{ marginBottom: 16 }}>
+          <Form.Item name="dify_endpoint" label="Dify 端点">
+            <Input placeholder="https://api.dify.ai/v1" />
+          </Form.Item>
           <Form.Item name="data_retention_days" label="数据保留天数">
             <InputNumber min={1} max={3650} style={{ width: 120 }} />
           </Form.Item>

@@ -16,6 +16,7 @@ import {
   AuditOutlined,
   NotificationOutlined,
   ProfileOutlined,
+  PieChartOutlined,
 } from '@ant-design/icons';
 import { ROUTES } from './routes';
 
@@ -46,6 +47,12 @@ export const menuConfig: MenuItem[] = [
       { key: 'scheduling', label: '调度监控', icon: ScheduleOutlined, path: ROUTES.SCHEDULING },
       { key: 'history', label: '执行历史', icon: HistoryOutlined, path: ROUTES.HISTORY },
     ],
+  },
+  {
+    key: 'department-agent-usage',
+    label: 'Agent 使用情况',
+    icon: PieChartOutlined,
+    path: ROUTES.DEPARTMENT_AGENT_USAGE,
   },
   {
     key: 'config',

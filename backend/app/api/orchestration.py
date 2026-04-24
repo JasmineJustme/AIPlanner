@@ -8,8 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory, get_db
+from app.dependencies.auth import get_current_user
 from app.engine.orchestrator import orchestrator
-from app.models import Todo, SchedulePlan, ScheduleTask, Agent, WAgent, Orchestration
+from app.models import Todo, SchedulePlan, ScheduleTask, Agent, WAgent, Orchestration, User
 from app.services.schedule_rebalance import rebalance_schedule_tasks
 from app.services.sse_manager import sse_manager
 from app.utils.timezone import (
@@ -64,6 +65,18 @@ async def _broadcast_orchestration_complete(
 
 class SubmitPayload(BaseModel):
     todo_ids: list[str]
+
+
+def _can_access_todo(current_user: User, todo: Todo) -> bool:
+    if getattr(current_user, "is_superuser", False):
+        return True
+    return todo.creator_id == current_user.id
+
+
+def _can_access_orchestration(current_user: User, orch: Orchestration) -> bool:
+    if getattr(current_user, "is_superuser", False):
+        return True
+    return orch.user_id == current_user.id
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +798,7 @@ async def recover_stale_analyzing_orchestrations() -> int:
 async def submit_orchestration(
     payload: SubmitPayload,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     if not payload.todo_ids:
         raise HTTPException(status_code=400, detail="请至少选择一个待办任务")
@@ -794,6 +808,13 @@ async def submit_orchestration(
 
     result = await db.execute(select(Todo).where(Todo.id.in_(payload.todo_ids)))
     todos = result.scalars().all()
+
+    if not todos:
+        raise HTTPException(status_code=400, detail="未找到对应的待办任务")
+    if not getattr(current_user, "is_superuser", False):
+        unauthorized = [todo.title for todo in todos if not _can_access_todo(current_user, todo)]
+        if unauthorized:
+            raise HTTPException(status_code=403, detail="仅可编排自己创建的待办任务")
 
     if not todos:
         raise HTTPException(status_code=400, detail="未找到对应的待办任务")
@@ -842,6 +863,7 @@ async def submit_orchestration(
 
     orch = Orchestration(
         id=orch_id,
+        user_id=current_user.id if hasattr(current_user, "id") else None,
         summary=summary,
         status="analyzing",
         submitted_at=now,
@@ -869,11 +891,14 @@ async def submit_orchestration(
 @router.get("/pending")
 async def list_pending_orchestrations(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     result = await db.execute(
         select(Orchestration).where(Orchestration.status != "cancelled")
     )
     orchestrations = result.scalars().all()
+    if not getattr(current_user, "is_superuser", False):
+        orchestrations = [o for o in orchestrations if _can_access_orchestration(current_user, o)]
 
     items = []
     for orch in orchestrations:
@@ -908,10 +933,13 @@ async def list_pending_orchestrations(
 async def get_orchestration_detail(
     orch_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     orch = await db.get(Orchestration, orch_id)
     if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
+    if not _can_access_orchestration(current_user, orch):
+        raise HTTPException(status_code=403, detail="无权查看该编排")
     _snapshot_llm_recommendation(orch)
     _restore_plan_input_params_from_snapshot(orch)
     return {
@@ -926,10 +954,13 @@ async def confirm_orchestration(
     orch_id: str,
     payload: dict | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     orch = await db.get(Orchestration, orch_id)
     if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
+    if not _can_access_orchestration(current_user, orch):
+        raise HTTPException(status_code=403, detail="无权操作该编排")
     previous_status = orch.status or "pending_confirm"
     if payload:
         plan = dict(orch.plan or {})
@@ -981,10 +1012,13 @@ async def confirm_wagent(
     orch_id: str,
     payload: dict,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     orch = await db.get(Orchestration, orch_id)
     if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
+    if not _can_access_orchestration(current_user, orch):
+        raise HTTPException(status_code=403, detail="无权操作该编排")
     previous_status = orch.status or "pending_confirm"
     if payload:
         plan = dict(orch.plan or {})
@@ -1036,10 +1070,13 @@ async def modify_agent(
     orch_id: str,
     payload: dict,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     orch = await db.get(Orchestration, orch_id)
     if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
+    if not _can_access_orchestration(current_user, orch):
+        raise HTTPException(status_code=403, detail="无权操作该编排")
 
     _snapshot_llm_recommendation(orch)
 
@@ -1102,10 +1139,13 @@ async def modify_params(
     orch_id: str,
     payload: dict,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     orch = await db.get(Orchestration, orch_id)
     if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
+    if not _can_access_orchestration(current_user, orch):
+        raise HTTPException(status_code=403, detail="无权操作该编排")
     plan = dict(orch.plan or {})
     if "input_params" in payload:
         plan["input_params"] = payload["input_params"]
@@ -1139,10 +1179,13 @@ async def modify_params(
 async def cancel_orchestration(
     orch_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     orch = await db.get(Orchestration, orch_id)
     if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
+    if not _can_access_orchestration(current_user, orch):
+        raise HTTPException(status_code=403, detail="无权操作该编排")
 
     await sync_todos_for_orchestration(db, orch_id, status_override="cancelled")
     await _cancel_schedule_for_orchestration(db, orch_id)
@@ -1160,10 +1203,13 @@ async def cancel_orchestration(
 async def retry_orchestration(
     orch_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     orch = await db.get(Orchestration, orch_id)
     if not orch:
         raise HTTPException(status_code=404, detail="编排不存在")
+    if not _can_access_orchestration(current_user, orch):
+        raise HTTPException(status_code=403, detail="无权操作该编排")
     if orch.status not in ("pending_confirm", "failed", "cancelled"):
         raise HTTPException(
             status_code=400, detail="仅待确认、失败或已取消的编排可以重新编排"
