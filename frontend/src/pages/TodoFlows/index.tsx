@@ -47,6 +47,9 @@ export default function TodoFlowsPage() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
+  const displayUserLabel = (user?: { full_name?: string | null; username?: string | null; id?: string }) =>
+    user?.full_name || user?.username || user?.id || '-';
+
   const selectedIdsKey = selectedRowKeys.join(',');
   const isDepartment = currentUser?.role === 'department' || currentUser?.is_superuser;
 
@@ -200,6 +203,11 @@ export default function TodoFlowsPage() {
   const managedColumns: ColumnsType<DispatchableTodo> = [
     { title: '标题', dataIndex: 'title', key: 'title' },
     {
+      title: '被派发人',
+      key: 'target_user',
+      render: (_, record) => displayUserLabel({ id: record.target_user_id }),
+    },
+    {
       title: '派发与协作状态',
       dataIndex: 'last_flow_state',
       key: 'last_flow_state',
@@ -269,7 +277,7 @@ export default function TodoFlowsPage() {
         </Card>
 
         <Card title="派发与协作模块（原账户只读视图)">
-          <Text type="secondary">任务被派发或协作确认后，将转入目标账户的系统执行模块或用户执行模块；原账户在此仅可查看 `已移交` 或 `已完成` 状态。</Text>
+          <Text type="secondary">任务发起协作请求后会在此显示为 `请求中`；协作确认后或派发完成后，将继续在此以 `已移交` 或 `已完成` 状态只读展示。</Text>
           <Table
             rowKey="id"
             loading={loading}
@@ -286,6 +294,7 @@ export default function TodoFlowsPage() {
               <div>来源：{detail.source_type ?? '-'}</div>
               <div>当前状态：{detail.current_status ?? '-'}</div>
               <div>当前负责人：{detail.current_owner_name ?? '-'}</div>
+              <div>被派发人：{selectedItems[0]?.target_user_id ?? '-'}</div>
               <div>派发记录：{detail.dispatch_records?.length ? detail.dispatch_records.map((r) => `${r.created_at}`).join('；') : '无'}</div>
               <div>协作记录：{detail.collaboration_records?.length ? detail.collaboration_records.map((r) => `${r.created_at} / ${r.status}`).join('；') : '无'}</div>
               <div>历史记录：{detail.history?.length ? detail.history.map((r) => `${r.action} / ${r.created_at}`).join('；') : '无'}</div>

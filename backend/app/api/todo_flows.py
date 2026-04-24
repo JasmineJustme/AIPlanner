@@ -186,10 +186,18 @@ async def dispatchable_todos(
     offset = (page - 1) * size
     q = (
         select(Todo)
-        .where(Todo.status == "pending_confirm", Todo.creator_id == current_user.id)
+        .where(
+            Todo.status == "pending_confirm",
+            Todo.creator_id == current_user.id,
+            Todo.last_flow_state.is_(None),
+        )
         .order_by(Todo.created_at.desc())
     )
-    count_q = select(func.count()).select_from(Todo).where(Todo.status == "pending_confirm", Todo.creator_id == current_user.id)
+    count_q = select(func.count()).select_from(Todo).where(
+        Todo.status == "pending_confirm",
+        Todo.creator_id == current_user.id,
+        Todo.last_flow_state.is_(None),
+    )
     total = (await db.execute(count_q)).scalar() or 0
     items = (await db.execute(q.offset(offset).limit(size))).scalars().all()
     return {
@@ -207,19 +215,20 @@ async def managed_flow_todos(
     current_user: User = Depends(get_current_user),
 ):
     offset = (page - 1) * size
+    active_states = {"transferred", "requesting"}
     q = (
         select(Todo)
         .where(
             Todo.original_owner_id == current_user.id,
             Todo.owner_id != current_user.id,
-            Todo.last_flow_state.is_not(None),
+            Todo.last_flow_state.in_(active_states),
         )
         .order_by(Todo.updated_at.desc())
     )
     count_q = select(func.count()).select_from(Todo).where(
         Todo.original_owner_id == current_user.id,
         Todo.owner_id != current_user.id,
-        Todo.last_flow_state.is_not(None),
+        Todo.last_flow_state.in_(active_states),
     )
     total = (await db.execute(count_q)).scalar() or 0
     items = (await db.execute(q.offset(offset).limit(size))).scalars().all()
@@ -299,6 +308,8 @@ async def batch_action(body: BatchTodoFlowBody, db: AsyncSession = Depends(get_d
                 recipient_user_id=target.id,
                 sender_user_id=current_user.id,
             )
+            if todo.original_owner_id and todo.original_owner_id != current_user.id:
+                todo.last_flow_state = "transferred"
             await _append_flow_log(
                 db,
                 todo=todo,
@@ -444,16 +455,6 @@ async def accept_collaboration(request_id: str, db: AsyncSession = Depends(get_d
         db,
         type_="collaboration_accepted",
         title=todo.title,
-        content=f"协作请求已接受：{todo.title}",
-        related_id=todo.id,
-        related_request_id=request.id,
-        recipient_user_id=current_user.id,
-        sender_user_id=request.source_user_id,
-    )
-    await _create_message(
-        db,
-        type_="collaboration_accepted",
-        title=todo.title,
         content=f"对方已接受协作请求：{todo.title}",
         related_id=todo.id,
         related_request_id=request.id,
@@ -523,16 +524,6 @@ async def reject_collaboration(
             msg.type = "collaboration_rejected"
             msg.content = f"协作请求已拒绝：{todo.title}"
 
-    await _create_message(
-        db,
-        type_="collaboration_rejected",
-        title=todo.title,
-        content=f"协作请求已拒绝：{todo.title}",
-        related_id=todo.id,
-        related_request_id=request.id,
-        recipient_user_id=current_user.id,
-        sender_user_id=request.source_user_id,
-    )
     await _create_message(
         db,
         type_="collaboration_rejected",

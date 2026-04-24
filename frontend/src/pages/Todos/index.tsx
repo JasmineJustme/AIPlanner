@@ -825,9 +825,8 @@ export default function TodosPage() {
     },
   ];
 
-  const visibleTodoItems = data.items.filter((item) => !item.last_flow_state || item.owner_id === item.creator_id);
-  const userTodos = visibleTodoItems.filter((item) => getExecutionMode(item) === TodoExecutionMode.User);
-  const systemTodos = visibleTodoItems.filter((item) => getExecutionMode(item) !== TodoExecutionMode.User);
+  const userTodos = data.items.filter((item) => getExecutionMode(item) === TodoExecutionMode.User);
+  const systemTodos = data.items.filter((item) => getExecutionMode(item) !== TodoExecutionMode.User);
   const showOnlyUserModule = filters.status === TodoStatus.Pending;
   const showOnlySystemModule =
     filters.status === TodoStatus.Orchestrating || filters.status === TodoStatus.Scheduling;

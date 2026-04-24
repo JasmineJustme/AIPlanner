@@ -8,6 +8,7 @@ export interface DispatchableTodo {
   last_flow_state?: string | null;
   created_at: string;
   current_owner_name?: string;
+  target_user_id?: string | null;
 }
 
 export interface TodoFlowRecord {
