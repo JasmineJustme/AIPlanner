@@ -25,6 +25,7 @@ const ConfigResponsibilitiesPage = lazy(() => import('@/pages/Config/Responsibil
 const MessagesPage = lazy(() => import('@/pages/Messages'));
 const TodoFlowsPage = lazy(() => import('@/pages/TodoFlows'));
 const DepartmentAgentUsagePage = lazy(() => import('@/pages/DepartmentAgentUsage'));
+const DigitalHumanPlannerChatPage = lazy(() => import('@/pages/DigitalHumanPlannerChat'));
 const SettingsPage = lazy(() => import('@/pages/Settings'));
 const SettingsNotificationPrefsPage = lazy(() => import('@/pages/Settings/NotificationPrefs'));
 const AuditLogsPage = lazy(() => import('@/pages/AuditLogs'));
@@ -93,6 +94,7 @@ export default function App() {
                 <Route path="/orchestration" element={<OrchestrationPage />} />
                 <Route path="/scheduling" element={<SchedulingPage />} />
                 <Route path="/department-agent-usage" element={<DepartmentAgentUsagePage />} />
+                <Route path="/digital-human-planner/chat" element={<DigitalHumanPlannerChatPage />} />
 
                 <Route path="/history" element={<HistoryPage />} />
                 <Route path="/history/analytics" element={<HistoryAnalyticsPage />} />

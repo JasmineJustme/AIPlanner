@@ -12,7 +12,15 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
 def _todo_user_filter(current_user: User):
-    return Todo.creator_id == current_user.id
+    if getattr(current_user, "is_superuser", False):
+        return True
+    return Todo.owner_id == current_user.id
+
+
+def _todo_origin_user_filter(current_user: User):
+    if getattr(current_user, "is_superuser", False):
+        return True
+    return Todo.original_owner_id == current_user.id
 
 
 def _schedule_user_filter(current_user: User):
@@ -32,11 +40,17 @@ async def get_dashboard_stats(
     tomorrow_start = today_start + timedelta(days=1)
 
     todo_filter = _todo_user_filter(current_user)
-    todo_where = [Todo.execution_mode == "user", Todo.status.in_(["pending_confirm", "pending"]), todo_filter]
+    origin_todo_filter = _todo_origin_user_filter(current_user)
+    today_todo_where = [Todo.status.in_(["pending_confirm", "pending"]), todo_filter]
+    pending_confirm_where = [
+        Todo.status == "pending_confirm",
+        origin_todo_filter,
+        Todo.owner_id == Todo.original_owner_id,
+    ]
     completed_where = [Todo.status == "completed", Todo.completed_at.is_not(None), Todo.completed_at >= today_start, Todo.completed_at < tomorrow_start, todo_filter]
-    today_todo_result = await db.execute(select(func.count()).select_from(Todo).where(*todo_where))
+    today_todo_result = await db.execute(select(func.count()).select_from(Todo).where(*today_todo_where))
     pending_confirm_result = await db.execute(
-        select(func.count()).select_from(Todo).where(Todo.status == "pending_confirm", todo_filter)
+        select(func.count()).select_from(Todo).where(*pending_confirm_where)
     )
     scheduling_result = await db.execute(
         select(func.count())

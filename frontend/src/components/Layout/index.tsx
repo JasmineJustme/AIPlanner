@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Layout, Menu, Badge, Avatar, Dropdown, Button } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { Layout, Menu, Badge, Avatar, Dropdown, Button, Segmented } from 'antd';
 import ConfirmModal from '@/components/ConfirmModal';
 import { useConfirmModal } from '@/hooks/useConfirmModal';
 import {
@@ -9,6 +9,8 @@ import {
   UserOutlined,
   LogoutOutlined,
   ToolOutlined,
+  SettingOutlined,
+  ArrowLeftOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { menuConfig } from '@/constants/menu';
@@ -23,12 +25,30 @@ import styles from './index.module.css';
 
 const { Header, Sider, Content } = Layout;
 
+type NavMode = 'main' | 'settings' | 'messages';
+type SettingsTab = 'config' | 'system';
+
 const adminOnlyMenuItems = [
   {
     key: '/admin',
     icon: <ToolOutlined />,
     label: '管理员工作台',
   },
+];
+
+const configMenuItems = [
+  { key: ROUTES.CONFIG_AGENTS, icon: <ToolOutlined />, label: 'Agent 管理' },
+  { key: ROUTES.CONFIG_DATASOURCES, icon: <ToolOutlined />, label: '数据源配置' },
+  { key: ROUTES.CONFIG_RESPONSIBILITIES, icon: <ToolOutlined />, label: '工作职责配置' },
+  { key: ROUTES.CONFIG_LLM, icon: <ToolOutlined />, label: '大模型配置' },
+  { key: ROUTES.CONFIG_NOTIFICATIONS, icon: <ToolOutlined />, label: '提醒渠道配置' },
+  { key: ROUTES.CONFIG_IMPORT_EXPORT, icon: <ToolOutlined />, label: '配置导入/导出' },
+];
+
+const systemMenuItems = [
+  { key: ROUTES.SETTINGS, icon: <SettingOutlined />, label: '系统设置' },
+  { key: ROUTES.AUDIT_LOGS, icon: <ToolOutlined />, label: '操作审计日志' },
+  { key: ROUTES.SETTINGS_NOTIFICATION_PREFS, icon: <BellOutlined />, label: '提醒偏好设置' },
 ];
 
 function buildMenuItems(items: typeof menuConfig): any[] {
@@ -90,10 +110,22 @@ export default function AppLayout() {
   const currentUser = useAuthStore((s) => s.currentUser);
   const logout = useAuthStore((s) => s.logout);
   const [openKeys, setOpenKeys] = useState<string[]>(findOpenKeys(location.pathname));
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('config');
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.is_superuser;
   const canViewDepartmentAgentUsage = currentUser?.is_superuser || currentUser?.org_unit_type === 'department' || currentUser?.role === 'department';
   const selectedKey = location.pathname;
+
+  const navMode = useMemo<NavMode>(() => {
+    if (location.pathname.startsWith('/config/') || location.pathname.startsWith('/settings') || location.pathname.startsWith('/audit-logs')) return 'settings';
+    if (location.pathname.startsWith('/messages')) return 'messages';
+    return 'main';
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (location.pathname.startsWith('/config/')) setSettingsTab('config');
+    if (location.pathname.startsWith('/settings') || location.pathname.startsWith('/audit-logs')) setSettingsTab('system');
+  }, [location.pathname]);
 
   const handleMenuClick = ({ key }: { key: string }) => {
     if (key.startsWith('/')) {
@@ -140,6 +172,12 @@ export default function AppLayout() {
     },
   ];
 
+  const mainMenuItems = isAdmin
+    ? adminOnlyMenuItems
+    : buildMenuItems(menuConfig.filter((item) => item.key !== 'department-agent-usage' || canViewDepartmentAgentUsage));
+
+  const settingsItems = settingsTab === 'config' ? configMenuItems : systemMenuItems;
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider
@@ -161,17 +199,56 @@ export default function AppLayout() {
             fontWeight: 600,
           }}
         >
-          {siderCollapsed ? 'AC' : 'Audit Coworker'}
+          {navMode === 'settings' ? (siderCollapsed ? '设置' : '设置中心') : navMode === 'messages' ? (siderCollapsed ? '消息' : '消息中心') : (siderCollapsed ? 'AP' : 'AI Planner')}
         </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          openKeys={isAdmin || siderCollapsed ? [] : openKeys}
-          onOpenChange={handleOpenChange}
-          onClick={handleMenuClick}
-          items={isAdmin ? adminOnlyMenuItems : buildMenuItems(menuConfig.filter((item) => item.key !== 'department-agent-usage' || canViewDepartmentAgentUsage))}
-        />
+
+        {navMode === 'main' && (
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            openKeys={isAdmin || siderCollapsed ? [] : openKeys}
+            onOpenChange={handleOpenChange}
+            onClick={handleMenuClick}
+            items={mainMenuItems}
+          />
+        )}
+
+        {navMode === 'settings' && (
+          <>
+            {!siderCollapsed && (
+              <div className={styles.settingsTabsWrap}>
+                <Segmented
+                  block
+                  size="middle"
+                  value={settingsTab}
+                  onChange={(v) => setSettingsTab(v as SettingsTab)}
+                  options={[
+                    { label: '配置中心', value: 'config' },
+                    { label: '系统', value: 'system' },
+                  ]}
+                />
+              </div>
+            )}
+            <Menu
+              theme="dark"
+              mode="inline"
+              selectedKeys={[selectedKey]}
+              onClick={handleMenuClick}
+              items={settingsItems}
+            />
+          </>
+        )}
+
+        {navMode === 'messages' && (
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            onClick={handleMenuClick}
+            items={[{ key: ROUTES.MESSAGES, icon: <BellOutlined />, label: '消息中心' }]}
+          />
+        )}
       </Sider>
       <Layout>
         <Header className={styles.header} style={{ background: '#fff' }}>
@@ -179,9 +256,15 @@ export default function AppLayout() {
             <span className={styles.siderTrigger} onClick={toggleSider}>
               {siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             </span>
-            {!isAdmin && <SearchBar />}
+            {navMode !== 'main' && (
+              <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate(ROUTES.DASHBOARD)}>
+                返回主页
+              </Button>
+            )}
+            {!isAdmin && navMode === 'main' && <SearchBar />}
           </div>
           <div className={styles.headerRight}>
+            <SettingOutlined style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => navigate(ROUTES.CONFIG_AGENTS)} />
             <Badge count={unreadCount} size="small">
               <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => navigate(ROUTES.MESSAGES)} />
             </Badge>

@@ -42,3 +42,7 @@
 .siderTrigger:hover {
   color: #1677ff;
 }
+
+.settingsTabsWrap {
+  padding: 8px 10px 12px;
+}

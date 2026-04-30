@@ -27,6 +27,7 @@ export const ROUTES = {
   CONFIG_IMPORT_EXPORT: '/config/import-export',
   CONFIG_RESPONSIBILITIES: '/config/responsibilities',
   DEPARTMENT_AGENT_USAGE: '/department-agent-usage',
+  DIGITAL_HUMAN_PLANNER_CHAT: '/digital-human-planner/chat',
 
   MESSAGES: '/messages',
 
