@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Table, Space, Select, DatePicker, Button, Tag, Typography, message, Tooltip, Tabs, Modal, Input, Empty } from 'antd';
 import {
@@ -39,6 +39,28 @@ const MESSAGE_TYPE_OPTIONS = [
   { value: 'deadline_reminder', label: '到期提醒' },
   { value: 'system', label: '系统通知' },
 ];
+
+const SYSTEM_MESSAGE_TYPE_LABEL_MAP: Record<string, string> = {
+  review_new: '新待审',
+  orchestration_confirm: '编排确认',
+  task_confirm: '任务确认',
+  task_completed: '任务完成',
+  task_failed: '任务失败',
+  deadline_reminder: '到期提醒',
+  system: '系统通知',
+  dispatch_message: '派发消息',
+  collaboration_request: '协作请求',
+};
+
+const SYSTEM_MESSAGE_TYPES = new Set([
+  'review_new',
+  'orchestration_confirm',
+  'task_confirm',
+  'task_completed',
+  'task_failed',
+  'deadline_reminder',
+  'system',
+]);
 
 const STATUS_OPTIONS = [
   { value: 'unread', label: '未读' },
@@ -100,7 +122,15 @@ export default function MessagesPage() {
         const body = (res as { data: { data?: typeof data } }).data;
         const payload = body?.data ?? body;
         if (payload && typeof payload === 'object' && 'items' in payload) {
-          setData((prev) => ({ ...prev, items: (payload as { items: Message[] }).items, total: (payload as { total: number }).total, pages: (payload as { pages: number }).pages }));
+          const items = ((payload as { items: Message[] }).items ?? [])
+            .filter((item) => SYSTEM_MESSAGE_TYPES.has(item.type))
+            .map((item) => ({
+              ...item,
+              type: item.type === 'dispatch_message' || item.type === 'collaboration_request'
+                ? item.type
+                : item.type,
+            }));
+          setData((prev) => ({ ...prev, items, total: (payload as { total: number }).total, pages: (payload as { pages: number }).pages }));
         }
       } else if (tabKey === 'dispatch') {
         const res = await getDispatchMessages({ page: dispatchData.page, size: dispatchData.size });
@@ -148,18 +178,73 @@ export default function MessagesPage() {
     return () => { off('message', handler); };
   }, [on, off, incrementUnread]);
 
-  const handleMarkRead = async (id: string) => { try { await markMessageRead(id); message.success('已标记为已读'); loadMessages(); loadUnreadCount(); } catch { message.error('操作失败'); } };
+  const hoverReadTimers = useRef<Record<string, ReturnType<typeof setTimeout> | undefined>>({});
+
+  useEffect(() => () => {
+    Object.values(hoverReadTimers.current).forEach((timer) => timer && clearTimeout(timer));
+  }, []);
+
+  const handleMarkRead = async (id: string, showToast = true) => {
+    try {
+      await markMessageRead(id);
+      if (showToast) {
+        message.success('已标记为已读');
+      }
+      loadMessages();
+      loadUnreadCount();
+    } catch {
+      if (showToast) {
+        message.error('操作失败');
+      }
+    }
+  };
+
+  const handleRowHoverRead = (record: Message) => {
+    if (record.status !== 'unread') return;
+    const timerKey = record.id;
+    if (hoverReadTimers.current[timerKey]) {
+      clearTimeout(hoverReadTimers.current[timerKey]);
+    }
+    hoverReadTimers.current[timerKey] = setTimeout(() => {
+      void handleMarkRead(record.id, false);
+      delete hoverReadTimers.current[timerKey];
+    }, 500);
+  };
+
+  const handleRowHoverLeave = (record: Message) => {
+    const timer = hoverReadTimers.current[record.id];
+    if (timer) {
+      clearTimeout(timer);
+      delete hoverReadTimers.current[record.id];
+    }
+  };
+
   const handleMarkProcessed = async (id: string) => { try { await markMessageProcessed(id); message.success('已标记为已处理'); loadMessages(); loadUnreadCount(); } catch { message.error('操作失败'); } };
   const handleBatchRead = async () => { const ids = selectedRowKeys.length > 0 ? selectedRowKeys : data.items.filter((m) => m.status === 'unread').map((m) => m.id); if (ids.length === 0) { message.warning('当前无未读消息'); return; } try { await batchReadMessages(ids); message.success('已全部标记为已读'); setSelectedRowKeys([]); loadMessages(); loadUnreadCount(); } catch { message.error('操作失败'); } };
   const handleBatchDelete = async () => { const processed = data.items.filter((m) => m.status === 'processed'); const ids = selectedRowKeys.length > 0 ? selectedRowKeys : processed.map((m) => m.id); if (ids.length === 0) { message.warning(selectedRowKeys.length === 0 ? '没有已处理的消息可删除' : '请选择消息'); return; } try { await batchDeleteMessages(ids); message.success('已删除'); setSelectedRowKeys([]); loadMessages(); loadUnreadCount(); } catch { message.error('操作失败'); } };
 
   const systemColumns: ColumnsType<Message> = [
-    { title: '类型', dataIndex: 'type', key: 'type', width: 140, render: (type: string) => (<span>{getTypeIcon(type)}{MESSAGE_TYPE_OPTIONS.find((o) => o.value === type)?.label ?? type}</span>) },
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      width: 160,
+      render: (type: string) => {
+        const label = SYSTEM_MESSAGE_TYPE_LABEL_MAP[type] ?? type;
+        return <span>{getTypeIcon(type)}{label}</span>;
+      },
+    },
     { title: '标题', dataIndex: 'title', key: 'title', render: (title: string, record) => (<span style={{ fontWeight: record.status === 'unread' ? 600 : 400 }}>{title}</span>) },
     { title: '内容', dataIndex: 'content', key: 'content', ellipsis: true, render: (content: string, record) => (<Tooltip title={content}><span style={{ fontWeight: record.status === 'unread' ? 600 : 400 }}>{truncate(content, 60)}</span></Tooltip>) },
     { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (status: string) => { const cfg = STATUS_TAG_MAP[status] ?? { color: 'default', text: status }; return <Tag color={cfg.color}>{cfg.text}</Tag>; } },
     { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 100, render: (v: string) => formatDate(v) },
-    { title: '操作', key: 'action', width: 220, fixed: 'right', render: (_, record) => (<Space size="small">{record.status === 'unread' && (<Button type="link" size="small" icon={<ReadOutlined />} onClick={() => handleMarkRead(record.id)}>标记已读</Button>)}{record.status !== 'processed' && (<Button type="link" size="small" icon={<CheckCircleOutlined />} onClick={() => handleMarkProcessed(record.id)}>标记已处理</Button>)}{record.action_url && (<Button type="link" size="small" icon={<SendOutlined />} onClick={() => navigate(record.action_url!)}>去确认</Button>)}</Space>) },
+  ];
+
+  const dispatchColumns: ColumnsType<any> = [
+    { title: '标题', dataIndex: 'title', key: 'title' },
+    { title: '内容', dataIndex: 'content', key: 'content', ellipsis: true, render: (content: string) => <Tooltip title={content}><span>{truncate(content, 60)}</span></Tooltip> },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (status: string) => { const cfg = STATUS_TAG_MAP[status] ?? { color: 'default', text: status }; return <Tag color={cfg.color}>{cfg.text}</Tag>; } },
+    { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 100, render: (v: string) => formatDate(v) },
   ];
 
   const collabColumns: ColumnsType<any> = [
@@ -216,7 +301,7 @@ export default function MessagesPage() {
             <Table
               rowKey="id"
               loading={loading}
-              columns={systemColumns as ColumnsType<any>}
+              columns={dispatchColumns}
               dataSource={dispatchData.items}
               pagination={false}
               locale={{ emptyText: <Empty description="暂无派发消息" /> }}
@@ -248,7 +333,12 @@ export default function MessagesPage() {
                 loading={loading}
                 columns={systemColumns}
                 dataSource={data.items}
-                rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as string[]) }}
+                onRow={(record) => ({
+                  onMouseEnter: () => {
+                    void handleRowHoverRead(record);
+                  },
+                  onMouseLeave: () => handleRowHoverLeave(record),
+                })}
                 pagination={{ current: data.page, pageSize: data.size, total: data.total, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
                 onChange={(pagination) => setData((prev) => ({ ...prev, page: pagination.current ?? 1, size: pagination.pageSize ?? 20 }))}
                 locale={{ emptyText: <Empty description="暂无系统消息" /> }}

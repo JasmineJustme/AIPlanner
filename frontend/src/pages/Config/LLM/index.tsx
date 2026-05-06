@@ -352,7 +352,11 @@ function LLMTab({
             <Form.Item name="provider" label="Provider">
               <Select options={PROVIDER_OPTIONS} placeholder="选择 Provider" />
             </Form.Item>
-            <Form.Item name="model_name" label="模型名称">
+            <Form.Item
+              name="model_name"
+              label="模型名称"
+              rules={[{ required: true, message: '请输入模型名称' }]}
+            >
               <Input placeholder="如 gpt-4, gpt-3.5-turbo" />
             </Form.Item>
             <Form.Item

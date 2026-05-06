@@ -101,6 +101,7 @@ function DataSourceCard({
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(ds.last_sync_status !== 'success');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const selectedAgentId = Form.useWatch('agent_id', form) as string | undefined;
   const selectedAgent = useMemo(
@@ -134,6 +135,7 @@ function DataSourceCard({
 
     baseValues.input_param_values = prefillValues;
     form.setFieldsValue(baseValues);
+    setHasUnsavedChanges(false);
   }, [ds, agents, form]);
 
   useEffect(() => {
@@ -176,6 +178,9 @@ function DataSourceCard({
     label: `${agent.name}${agent.is_enabled === false ? '（已禁用）' : ''}`,
   }));
 
+  const hasSavedBinding = Boolean(ds.agent_id);
+  const testDisabled = hasUnsavedChanges || !hasSavedBinding;
+
   return (
     <Card
       title={ds.name ?? ds.type}
@@ -200,6 +205,7 @@ function DataSourceCard({
         form={form}
         layout="vertical"
         onFinish={handleFinish}
+        onValuesChange={() => setHasUnsavedChanges(true)}
         initialValues={{
           agent_id: inferAgentIdForDatasource(ds, agents),
         }}
@@ -237,7 +243,7 @@ function DataSourceCard({
           <Button type="primary" htmlType="submit" loading={loading}>
             保存
           </Button>
-          <Button style={{ marginLeft: 8 }} onClick={() => onTest(ds.type)}>
+          <Button style={{ marginLeft: 8 }} onClick={() => onTest(ds.type)} disabled={testDisabled}>
             测试
           </Button>
           <Button style={{ marginLeft: 8 }} onClick={() => onSync(ds.type)}>

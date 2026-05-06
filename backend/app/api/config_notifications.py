@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Agent, NotificationChannel
+from app.models import Agent, NotificationChannel, SystemSetting
 from app.schemas.notification_channel import (
     NotificationChannelCreate,
     NotificationChannelResponse,
@@ -170,6 +170,17 @@ async def _get_channel_by_type(db: AsyncSession, channel_type: str) -> Notificat
     return exact or rows[0]
 
 
+async def _get_system_dify_endpoint(db: AsyncSession) -> str:
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+    setting = result.scalar_one_or_none()
+    raw = setting.value if setting else None
+    if isinstance(raw, dict):
+        return str(raw.get("value") or raw.get("endpoint") or "").strip()
+    if raw is not None:
+        return str(raw).strip()
+    return ""
+
+
 @router.get("")
 async def list_notification_channels(
     db: AsyncSession = Depends(get_db),
@@ -312,11 +323,36 @@ async def test_channel(
     channel_type: str,
     db: AsyncSession = Depends(get_db),
 ):
+    import time
+    from app.services.dify_client import dify_client
+
     channel_type = _validate_channel_type(channel_type)
     ch = await _get_channel_by_type(db, channel_type)
     if not ch:
         raise HTTPException(status_code=404, detail="Channel not found")
-    return {"code": 200, "message": "success", "data": {"connected": True, "latency_ms": 42}}
+
+    endpoint = await _get_system_dify_endpoint(db)
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="系统设置页未配置 dify_endpoint")
+    if not ch.dify_api_key:
+        raise HTTPException(status_code=400, detail="提醒渠道未配置 API Key")
+
+    start = time.monotonic()
+    test_result = await dify_client.test_connection(endpoint, ch.dify_api_key)
+    latency_ms = int((time.monotonic() - start) * 1000)
+
+    if not test_result.get("connected"):
+        raise HTTPException(status_code=502, detail=test_result.get("error") or "连接失败")
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "connected": True,
+            "latency_ms": latency_ms,
+            "status_code": test_result.get("status_code"),
+        },
+    }
 
 
 @router.delete("/{channel_type}")

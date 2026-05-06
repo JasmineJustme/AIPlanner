@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Agent, WAgent
+from app.models import Agent, WAgent, SystemSetting
 from app.models.execution import ExecutionHistory
 from app.models.schedule import ScheduleTask
 from app.models.wagent import WAgentVersion
@@ -18,6 +18,16 @@ def _now_local_naive() -> datetime:
 
 
 class Executor:
+    async def _get_system_dify_endpoint(self, db: AsyncSession) -> str:
+        result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+        setting = result.scalar_one_or_none()
+        raw = setting.value if setting else None
+        if isinstance(raw, dict):
+            return str(raw.get("value") or raw.get("endpoint") or "").strip()
+        if raw is not None:
+            return str(raw).strip()
+        return ""
+
     def _build_execution_log(self, *, task: ScheduleTask, target_type: str, target_name: str | None, status: str, payload=None, error: str | None = None) -> str:
         content = {
             "task_id": task.id,
@@ -37,10 +47,14 @@ class Executor:
         if not agent:
             return await self._record_failure(db, task, "Agent not found")
 
+        endpoint = await self._get_system_dify_endpoint(db)
+        if not endpoint:
+            return await self._record_failure(db, task, "系统设置页未配置 dify_endpoint")
+
         started_at = _now_local_naive()
         try:
             result = await dify_client.call_agent(
-                agent.dify_endpoint, agent.dify_api_key,
+                endpoint, agent.dify_api_key,
                 task.input_params or {}, agent.timeout_seconds
             )
             completed_at = _now_local_naive()
@@ -90,6 +104,10 @@ class Executor:
         if not version or not version.steps:
             return await self._record_failure(db, task, "W-Agent version or steps not found", wagent=wagent)
 
+        endpoint = await self._get_system_dify_endpoint(db)
+        if not endpoint:
+            return await self._record_failure(db, task, "系统设置页未配置 dify_endpoint", wagent=wagent)
+
         started_at = _now_local_naive()
         step_outputs = {}
         try:
@@ -103,7 +121,7 @@ class Executor:
                 inputs = self._resolve_params(step.get("param_mapping", {}), task.input_params or {}, step_outputs)
 
                 result = await dify_client.call_workflow(
-                    wf.dify_endpoint, wf.dify_api_key, inputs, wf.timeout_seconds
+                    endpoint, wf.dify_api_key, inputs, wf.timeout_seconds
                 )
                 step_outputs[step.get("order", 0)] = result
 

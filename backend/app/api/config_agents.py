@@ -13,7 +13,6 @@ router = APIRouter(prefix="/config/agents", tags=["config-agents"])
 
 class FetchDifyInfoRequest(BaseModel):
     dify_api_key: str
-    dify_endpoint: str | None = None
 
 
 @router.post("/fetch-dify-info")
@@ -23,18 +22,18 @@ async def fetch_dify_info(
 ):
     from app.services.dify_client import dify_client
 
-    endpoint = (payload.dify_endpoint or "").strip()
-    if not endpoint:
-        result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
-        setting = result.scalar_one_or_none()
-        raw = setting.value if setting else None
-        if isinstance(raw, dict):
-            endpoint = str(raw.get("value") or raw.get("endpoint") or "").strip()
-        elif raw is not None:
-            endpoint = str(raw).strip()
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+    setting = result.scalar_one_or_none()
+    raw = setting.value if setting else None
+    if isinstance(raw, dict):
+        endpoint = str(raw.get("value") or raw.get("endpoint") or "").strip()
+    elif raw is not None:
+        endpoint = str(raw).strip()
+    else:
+        endpoint = ""
 
     if not endpoint or not payload.dify_api_key:
-        raise HTTPException(status_code=400, detail="请提供系统 Dify 端点和 API Key")
+        raise HTTPException(status_code=400, detail="请提供系统设置页中的 Dify 端点和 API Key")
 
     meta = await dify_client.fetch_app_meta(endpoint, payload.dify_api_key)
     return {"code": 200, "message": "success", "data": meta}
@@ -91,11 +90,28 @@ async def create_agent(
 ):
     data = payload.model_dump()
     creator_id = data.get("creator_id") or current_user.id
+
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+    setting = result.scalar_one_or_none()
+    raw = setting.value if setting else None
+    if isinstance(raw, dict):
+        endpoint = str(raw.get("value") or raw.get("endpoint") or "").strip()
+    elif raw is not None:
+        endpoint = str(raw).strip()
+    else:
+        endpoint = ""
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="请先在系统设置页配置 dify_endpoint")
+
+    existed = await db.execute(select(Agent).where(Agent.name == data["name"]))
+    if existed.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Agent 名称已存在，请更换名称")
+
     agent = Agent(
         name=data["name"],
         description=data.get("description"),
         capability_tags=data.get("capability_tags", []),
-        dify_endpoint=data["dify_endpoint"],
+        dify_endpoint=endpoint,
         dify_api_key=data["dify_api_key"],
         input_params=data.get("input_params", []),
         output_params=data.get("output_params", []),
@@ -123,6 +139,19 @@ async def update_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     data = payload.model_dump(exclude_unset=True)
+
+    new_name = data.get("name")
+    if new_name is not None:
+        normalized_name = new_name.strip()
+        if not normalized_name:
+            raise HTTPException(status_code=400, detail="Agent 名称不能为空")
+        duplicate_result = await db.execute(
+            select(Agent).where(Agent.name == normalized_name, Agent.id != agent_id)
+        )
+        if duplicate_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Agent 名称已存在，请更换名称")
+        data["name"] = normalized_name
+
     for k, v in data.items():
         if k in ("input_params", "output_params") and v is not None:
             v = [p.model_dump() if hasattr(p, "model_dump") else p for p in v]
@@ -178,11 +207,21 @@ async def test_agent(
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if not agent.dify_endpoint:
-        raise HTTPException(status_code=400, detail="Agent 未配置 Endpoint")
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+    setting = result.scalar_one_or_none()
+    raw = setting.value if setting else None
+    if isinstance(raw, dict):
+        endpoint = str(raw.get("value") or raw.get("endpoint") or "").strip()
+    elif raw is not None:
+        endpoint = str(raw).strip()
+    else:
+        endpoint = ""
+
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="系统设置页未配置 Dify Endpoint")
 
     start = time.monotonic()
-    test_result = await dify_client.test_connection(agent.dify_endpoint, agent.dify_api_key)
+    test_result = await dify_client.test_connection(endpoint, agent.dify_api_key)
     latency_ms = int((time.monotonic() - start) * 1000)
 
     if not test_result["connected"]:

@@ -4,6 +4,8 @@ import {
   CalendarOutlined,
   ProjectOutlined,
   EditOutlined,
+  ForkOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import { SOURCE_MAP } from '@/constants/status';
 
@@ -12,6 +14,8 @@ const iconMap: Record<string, React.ReactNode> = {
   MailOutlined: <MailOutlined />,
   CalendarOutlined: <CalendarOutlined />,
   ProjectOutlined: <ProjectOutlined />,
+  ForkOutlined: <ForkOutlined />,
+  TeamOutlined: <TeamOutlined />,
 };
 
 interface Props {
@@ -19,7 +23,8 @@ interface Props {
 }
 
 export default function SourceTag({ source }: Props) {
-  const config = SOURCE_MAP[source] || {
+  const normalizedSource = (source || '').toLowerCase();
+  const config = SOURCE_MAP[normalizedSource] || {
     color: '#8c8c8c',
     text: source,
     icon: 'EditOutlined',

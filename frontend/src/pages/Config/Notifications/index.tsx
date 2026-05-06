@@ -102,6 +102,7 @@ function NotificationCard({
 }) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const selectedAgentId = Form.useWatch('agent_id', form) as string | undefined;
   const selectedAgent = useMemo(
@@ -137,6 +138,7 @@ function NotificationCard({
       input_param_values: prefill,
       message_field: config.message_field,
     });
+    setHasUnsavedChanges(false);
   }, [agents, config, form, label]);
 
   const handleFinish = async (values: Record<string, unknown>) => {
@@ -156,6 +158,9 @@ function NotificationCard({
     label: `${agent.name}${agent.is_enabled === false ? '（已禁用）' : ''}`,
   }));
 
+  const hasSavedBinding = Boolean(config.agent_id);
+  const testDisabled = hasUnsavedChanges || !hasSavedBinding;
+
   return (
     <Card
       title={config.name ?? label}
@@ -165,7 +170,7 @@ function NotificationCard({
         <Tag color={config.is_enabled ? 'success' : 'default'}>{config.is_enabled ? '已启用' : '已停用'}</Tag>
         <Text type="secondary" style={{ marginLeft: 8 }}>渠道类型: {channelKey}</Text>
       </div>
-      <Form form={form} layout="vertical" onFinish={handleFinish}>
+      <Form form={form} layout="vertical" onFinish={handleFinish} onValuesChange={() => setHasUnsavedChanges(true)}>
         <Form.Item
           name="agent_id"
           label="绑定 Agent"
@@ -208,7 +213,7 @@ function NotificationCard({
         )}
         <Form.Item style={{ marginTop: 12 }}>
           <Button type="primary" htmlType="submit" loading={loading}>保存</Button>
-          <Button style={{ marginLeft: 8 }} onClick={() => onTest(channelKey)}>测试</Button>
+          <Button style={{ marginLeft: 8 }} onClick={() => onTest(channelKey)} disabled={testDisabled}>测试</Button>
           <Popconfirm
             title="删除提醒渠道"
             description="删除后不可恢复，是否继续？"

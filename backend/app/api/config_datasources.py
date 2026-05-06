@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import time
 
 from app.database import get_db
-from app.models import Agent, DataSource
+from app.models import Agent, DataSource, SystemSetting
 from app.schemas.datasource import DataSourceCreate, DataSourceUpdate, DataSourceResponse
 from app.services.dify_client import dify_client
 
@@ -67,6 +67,17 @@ def _mark_datasource_check(ds: DataSource, status: str, error: str | None = None
     ds.last_sync_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
     ds.last_sync_status = status
     ds.last_sync_error = error
+
+
+async def _get_system_dify_endpoint(db: AsyncSession) -> str:
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+    setting = result.scalar_one_or_none()
+    raw = setting.value if setting else None
+    if isinstance(raw, dict):
+        return str(raw.get("value") or raw.get("endpoint") or "").strip()
+    if raw is not None:
+        return str(raw).strip()
+    return ""
 
 
 @router.get("")
@@ -165,13 +176,14 @@ async def test_datasource(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Datasource not found")
-    if not ds.dify_endpoint:
-        _mark_datasource_check(ds, "failed", "Datasource 未配置 Endpoint")
+    endpoint = await _get_system_dify_endpoint(db)
+    if not endpoint:
+        _mark_datasource_check(ds, "failed", "系统设置页未配置 dify_endpoint")
         await db.flush()
-        raise HTTPException(status_code=400, detail="Datasource 未配置 Endpoint")
+        raise HTTPException(status_code=400, detail="系统设置页未配置 dify_endpoint")
 
     start = time.monotonic()
-    test_result = await dify_client.test_connection(ds.dify_endpoint, ds.dify_api_key or "")
+    test_result = await dify_client.test_connection(endpoint, ds.dify_api_key or "")
     latency_ms = int((time.monotonic() - start) * 1000)
 
     if not test_result.get("connected"):
