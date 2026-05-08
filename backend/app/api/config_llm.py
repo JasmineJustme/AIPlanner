@@ -5,7 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import LLMConfig
+from app.dependencies.auth import get_current_user
+from app.models import LLMConfig, User
 from app.schemas.llm_config import LLMConfigUpdate, LLMConfigResponse
 from app.services.llm_client import llm_client
 
@@ -17,8 +18,6 @@ REQUIRED_PROMPT_PLACEHOLDERS_BY_PURPOSE = {
         "{current_time}",
         "{todo_desc}",
         "{agent_desc}",
-        "{wagent_desc}",
-        "{workflow_desc}",
     ],
     "todo_analysis": [
         "{current_time}",
@@ -36,14 +35,11 @@ ALLOWED_PROMPT_PLACEHOLDERS_BY_PURPOSE = {
         "{current_time}",
         "{todo_desc}",
         "{agent_desc}",
-        "{wagent_desc}",
-        "{workflow_desc}",
     ],
     "todo_analysis": [
         "{current_time}",
         "{datasource_info}",
         "{responsibilities}",
-        # Backward-compatible optional placeholder used by some custom prompts.
         "{todo_desc}",
     ],
     "todo_dedup": [
@@ -110,11 +106,14 @@ def _normalize_purpose_alias(purpose: str) -> str:
     return "todo_dedup" if purpose == "scheduling" else purpose
 
 
-async def _migrate_scheduling_to_todo_dedup_if_needed(db: AsyncSession) -> None:
-    # Reuse old "scheduling" config data under the new "todo_dedup" purpose.
-    dedup_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "todo_dedup"))
+async def _migrate_scheduling_to_todo_dedup_if_needed(db: AsyncSession, user_id: str) -> None:
+    dedup_result = await db.execute(
+        select(LLMConfig).where(LLMConfig.purpose == "todo_dedup", LLMConfig.user_id == user_id)
+    )
     dedup_cfg = dedup_result.scalar_one_or_none()
-    scheduling_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "scheduling"))
+    scheduling_result = await db.execute(
+        select(LLMConfig).where(LLMConfig.purpose == "scheduling", LLMConfig.user_id == user_id)
+    )
     scheduling_cfg = scheduling_result.scalar_one_or_none()
     if not scheduling_cfg:
         return
@@ -129,35 +128,35 @@ async def _migrate_scheduling_to_todo_dedup_if_needed(db: AsyncSession) -> None:
 @router.get("")
 async def list_llm_configs(
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    await _migrate_scheduling_to_todo_dedup_if_needed(db)
-    result = await db.execute(select(LLMConfig))
+    await _migrate_scheduling_to_todo_dedup_if_needed(db, current_user.id)
+    result = await db.execute(select(LLMConfig).where(LLMConfig.user_id == current_user.id))
     items = result.scalars().all()
     existing = {c.purpose for c in items}
     for purpose in LLM_PURPOSES:
         if purpose not in existing:
-            cfg = LLMConfig(purpose=purpose, prompt_template="")
+            cfg = LLMConfig(purpose=purpose, prompt_template="", user_id=current_user.id)
             db.add(cfg)
             await db.flush()
             items.append(cfg)
-    return {
-        "code": 200,
-        "message": "success",
-        "data": [_serialize_llm_config(i) for i in items],
-    }
+    return {"code": 200, "message": "success", "data": [_serialize_llm_config(i) for i in items]}
 
 
 @router.get("/{purpose}")
 async def get_llm_config(
     purpose: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     purpose = _normalize_purpose_alias(purpose)
-    await _migrate_scheduling_to_todo_dedup_if_needed(db)
-    result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
+    await _migrate_scheduling_to_todo_dedup_if_needed(db, current_user.id)
+    result = await db.execute(
+        select(LLMConfig).where(LLMConfig.purpose == purpose, LLMConfig.user_id == current_user.id)
+    )
     cfg = result.scalar_one_or_none()
     if not cfg:
-        cfg = LLMConfig(purpose=purpose, prompt_template="")
+        cfg = LLMConfig(purpose=purpose, prompt_template="", user_id=current_user.id)
         db.add(cfg)
         await db.flush()
         await db.refresh(cfg)
@@ -169,13 +168,16 @@ async def update_llm_config(
     purpose: str,
     payload: LLMConfigUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     purpose = _normalize_purpose_alias(purpose)
-    await _migrate_scheduling_to_todo_dedup_if_needed(db)
-    result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
+    await _migrate_scheduling_to_todo_dedup_if_needed(db, current_user.id)
+    result = await db.execute(
+        select(LLMConfig).where(LLMConfig.purpose == purpose, LLMConfig.user_id == current_user.id)
+    )
     cfg = result.scalar_one_or_none()
     if not cfg:
-        cfg = LLMConfig(purpose=purpose, prompt_template="")
+        cfg = LLMConfig(purpose=purpose, prompt_template="", user_id=current_user.id)
         db.add(cfg)
         await db.flush()
     data = payload.model_dump(exclude_unset=True)
@@ -198,49 +200,36 @@ async def update_llm_config(
 async def test_llm_config(
     purpose: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     purpose = _normalize_purpose_alias(purpose)
-    await _migrate_scheduling_to_todo_dedup_if_needed(db)
-    result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
+    await _migrate_scheduling_to_todo_dedup_if_needed(db, current_user.id)
+    result = await db.execute(
+        select(LLMConfig).where(LLMConfig.purpose == purpose, LLMConfig.user_id == current_user.id)
+    )
     cfg = result.scalar_one_or_none()
     if not cfg:
         raise HTTPException(status_code=404, detail="LLM config not found")
 
-    # Check if configured
     if not cfg.api_key or not cfg.api_endpoint:
-         # Return specific error so frontend can show helpful message, or handle as 400
-         # Using 200 with error structure to match client handling if preferred,
-         # but standard HTTP 400 is better for "Bad Request" (unconfigured).
-         # However, to be consistent with client error handling which might prefer 200 OK with error body for some logic:
-         # let's stick to standard exception which client interceptor handles.
-         raise HTTPException(status_code=400, detail="API Key and Endpoint are required")
+        raise HTTPException(status_code=400, detail="API Key and Endpoint are required")
 
     start_time = time.time()
     try:
-        # Simple test message
         response = await llm_client.chat(cfg, [{"role": "user", "content": "Hello"}])
         latency = int((time.time() - start_time) * 1000)
 
         return {
             "code": 200,
             "message": "success",
-            "data": {
-                "connected": True,
-                "latency_ms": latency,
-                "response": response.get("content", "")[:50] + "..."
-            }
+            "data": {"connected": True, "latency_ms": latency, "response": response.get("content", "")[:50] + "..."},
         }
     except Exception as e:
         latency = int((time.time() - start_time) * 1000)
-        # Return 200 so frontend can parse the specific error message easily in data
         return {
-             "code": 500,
-             "message": "failed",
-             "data": {
-                 "connected": False,
-                 "latency_ms": latency,
-                 "error": str(e)
-             }
+            "code": 500,
+            "message": "failed",
+            "data": {"connected": False, "latency_ms": latency, "error": str(e)},
         }
 
 
@@ -248,21 +237,19 @@ async def test_llm_config(
 async def get_llm_usage(
     purpose: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     purpose = _normalize_purpose_alias(purpose)
-    await _migrate_scheduling_to_todo_dedup_if_needed(db)
-    result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == purpose))
+    await _migrate_scheduling_to_todo_dedup_if_needed(db, current_user.id)
+    result = await db.execute(
+        select(LLMConfig).where(LLMConfig.purpose == purpose, LLMConfig.user_id == current_user.id)
+    )
     cfg = result.scalar_one_or_none()
     if not cfg:
-        # Return default zero usage instead of 404
         return {
             "code": 200,
             "message": "success",
-            "data": {
-                "total_tokens_used": 0,
-                "total_cost": 0.0,
-                "prompt_version": 1,
-            },
+            "data": {"total_tokens_used": 0, "total_cost": 0.0, "prompt_version": 1},
         }
     return {
         "code": 200,

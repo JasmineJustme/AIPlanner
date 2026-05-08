@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Float, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -6,7 +6,8 @@ from app.models.base import Base, TimestampMixin
 
 class LLMConfig(TimestampMixin, Base):
     __tablename__ = "llm_configs"
-    purpose: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    purpose: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     api_endpoint: Mapped[str | None] = mapped_column(String(500), nullable=True)

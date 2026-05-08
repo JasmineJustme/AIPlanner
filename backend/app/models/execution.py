@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -8,6 +8,7 @@ from app.models.base import Base, TimestampMixin
 
 class ExecutionHistory(TimestampMixin, Base):
     __tablename__ = "execution_history"
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     task_id: Mapped[str] = mapped_column(String(36), nullable=False)
     agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     wagent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

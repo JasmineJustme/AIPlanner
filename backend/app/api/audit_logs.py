@@ -3,7 +3,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import AuditLog
+from app.dependencies.auth import get_current_user
+from app.models import AuditLog, User
 from app.schemas.audit_log import AuditLogResponse
 
 router = APIRouter(prefix="/audit-logs", tags=["audit-logs"])
@@ -16,10 +17,14 @@ async def list_audit_logs(
     action: str | None = Query(None),
     resource_type: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     offset = (page - 1) * size
     q = select(AuditLog)
     count_q = select(func.count()).select_from(AuditLog)
+    if not getattr(current_user, "is_superuser", False):
+        q = q.where(AuditLog.user_id == current_user.id)
+        count_q = count_q.where(AuditLog.user_id == current_user.id)
     if action:
         q = q.where(AuditLog.action == action)
         count_q = count_q.where(AuditLog.action == action)

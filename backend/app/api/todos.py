@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from app.utils.recurrence import normalize_cron_expression, validate_cron_expression
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, and_
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,32 +16,55 @@ from pydantic import BaseModel
 from app.schemas.todo import TodoCreate, TodoUpdate, TodoResponse, TodoReviewConfirm
 
 
-async def _sync_origin_flow_completion(db: AsyncSession, todo: Todo, current_user_id: str | None) -> None:
+async def _sync_origin_flow_completion(
+    db: AsyncSession,
+    todo: Todo,
+    current_user_id: str | None,
+    *,
+    status_before: str | None = None,
+) -> None:
     if not todo.original_owner_id or todo.original_owner_id == (todo.owner_id or current_user_id):
         return
     if todo.status != "completed":
         return
+    if status_before == "completed":
+        return
+
     before_flow_state = todo.last_flow_state
     todo.last_flow_state = "completed"
-    db.add(
-        Message(
-            type="task_completed",
-            title=todo.title,
-            content=f"目标账户已完成任务：{todo.title}",
-            status="unread",
-            related_type="todo",
-            related_id=todo.id,
-            recipient_user_id=todo.original_owner_id,
-            sender_user_id=current_user_id or todo.owner_id,
+
+    existing_msg_result = await db.execute(
+        select(Message).where(
+            and_(
+                Message.type == "task_completed",
+                Message.related_type == "todo",
+                Message.related_id == todo.id,
+                Message.recipient_user_id == todo.original_owner_id,
+            )
         )
     )
+    existing_msg = existing_msg_result.scalar_one_or_none()
+    if not existing_msg:
+        db.add(
+            Message(
+                type="task_completed",
+                title=todo.title,
+                content=f"目标账户已完成任务：{todo.title}",
+                status="unread",
+                related_type="todo",
+                related_id=todo.id,
+                recipient_user_id=todo.original_owner_id,
+                sender_user_id=current_user_id or todo.owner_id,
+            )
+        )
+
     db.add(
         TodoFlowLog(
             todo_id=todo.id,
             action_type="complete",
             from_user_id=current_user_id or todo.owner_id,
             to_user_id=todo.original_owner_id,
-            status_before="pending",
+            status_before=status_before or "pending",
             status_after="completed",
             flow_state_before=before_flow_state,
             flow_state_after="completed",
@@ -140,6 +163,7 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
                 changed = True
             continue
 
+        status_before = todo.status
         next_status = map_orchestration_status_to_todo_status(orch.status)
         if todo.status != next_status:
             todo.status = next_status
@@ -149,6 +173,7 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
             if todo.completed_at != (completed_at or now):
                 todo.completed_at = completed_at or now
                 changed = True
+            await _sync_origin_flow_completion(db, todo, todo.owner_id, status_before=status_before)
         elif todo.completed_at is not None:
             todo.completed_at = None
             changed = True
@@ -303,10 +328,11 @@ async def complete_todo(
     if todo.status not in {"pending", "pending_confirm"}:
         raise HTTPException(status_code=400, detail="仅待确认的用户执行任务支持手动完成")
 
+    status_before = todo.status
     todo.status = "completed"
     todo.completed_at = utc_now_naive()
     todo.orchestration_id = None
-    await _sync_origin_flow_completion(db, todo, getattr(current_user, "id", None))
+    await _sync_origin_flow_completion(db, todo, getattr(current_user, "id", None), status_before=status_before)
     await db.flush()
     await db.refresh(todo)
     return {"code": 200, "message": "success", "data": TodoResponse.model_validate(todo)}

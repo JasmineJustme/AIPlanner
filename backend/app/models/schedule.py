@@ -8,6 +8,7 @@ from app.models.base import Base, TimestampMixin
 
 class SchedulePlan(TimestampMixin, Base):
     __tablename__ = "schedule_plans"
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     is_recurring: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -18,6 +19,7 @@ class SchedulePlan(TimestampMixin, Base):
 
 class ScheduleTask(TimestampMixin, Base):
     __tablename__ = "schedule_tasks"
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     plan_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("schedule_plans.id"), nullable=False
     )

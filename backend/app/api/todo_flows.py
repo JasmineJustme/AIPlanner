@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,6 +31,8 @@ COLLAB_MESSAGE_TYPES = {
     "collaboration_accepted",
     "collaboration_rejected",
 }
+DISPATCH_FLOW_TYPES = {"dispatch"}
+COLLAB_FLOW_TYPES = {"collaboration", "collaboration_accept"}
 
 
 def _is_department_user(user: User) -> bool:
@@ -217,19 +219,17 @@ async def managed_flow_todos(
     current_user: User = Depends(get_current_user),
 ):
     offset = (page - 1) * size
-    active_states = {"transferred", "requesting"}
+    active_states = {"transferred", "requesting", "accepted", "completed"}
     q = (
         select(Todo)
         .where(
-            Todo.original_owner_id == current_user.id,
-            Todo.owner_id != current_user.id,
+            Todo.owner_id == current_user.id,
             Todo.last_flow_state.in_(active_states),
         )
         .order_by(Todo.updated_at.desc())
     )
     count_q = select(func.count()).select_from(Todo).where(
-        Todo.original_owner_id == current_user.id,
-        Todo.owner_id != current_user.id,
+        Todo.owner_id == current_user.id,
         Todo.last_flow_state.in_(active_states),
     )
     total = (await db.execute(count_q)).scalar() or 0
@@ -380,12 +380,35 @@ async def dispatch_messages(
     offset = (page - 1) * size
     q = (
         select(Message)
-        .where(Message.type.in_(DISPATCH_MESSAGE_TYPES), Message.recipient_user_id == current_user.id)
+        .outerjoin(Todo, Todo.id == Message.related_id)
+        .where(
+            Message.recipient_user_id == current_user.id,
+            or_(
+                Message.type.in_(DISPATCH_MESSAGE_TYPES),
+                and_(
+                    Message.type == "task_completed",
+                    Message.related_type == "todo",
+                    Todo.last_flow_type.in_(DISPATCH_FLOW_TYPES),
+                ),
+            ),
+        )
         .order_by(Message.created_at.desc())
     )
-    count_q = select(func.count()).select_from(Message).where(
-        Message.type.in_(DISPATCH_MESSAGE_TYPES),
-        Message.recipient_user_id == current_user.id,
+    count_q = (
+        select(func.count())
+        .select_from(Message)
+        .outerjoin(Todo, Todo.id == Message.related_id)
+        .where(
+            Message.recipient_user_id == current_user.id,
+            or_(
+                Message.type.in_(DISPATCH_MESSAGE_TYPES),
+                and_(
+                    Message.type == "task_completed",
+                    Message.related_type == "todo",
+                    Todo.last_flow_type.in_(DISPATCH_FLOW_TYPES),
+                ),
+            ),
+        )
     )
     total = (await db.execute(count_q)).scalar() or 0
     items = (await db.execute(q.offset(offset).limit(size))).scalars().all()
@@ -406,12 +429,35 @@ async def collaboration_requests(
     offset = (page - 1) * size
     q = (
         select(Message)
-        .where(Message.type.in_(COLLAB_MESSAGE_TYPES), Message.recipient_user_id == current_user.id)
+        .outerjoin(Todo, Todo.id == Message.related_id)
+        .where(
+            Message.recipient_user_id == current_user.id,
+            or_(
+                Message.type.in_(COLLAB_MESSAGE_TYPES),
+                and_(
+                    Message.type == "task_completed",
+                    Message.related_type == "todo",
+                    Todo.last_flow_type.in_(COLLAB_FLOW_TYPES),
+                ),
+            ),
+        )
         .order_by(Message.created_at.desc())
     )
-    count_q = select(func.count()).select_from(Message).where(
-        Message.type.in_(COLLAB_MESSAGE_TYPES),
-        Message.recipient_user_id == current_user.id,
+    count_q = (
+        select(func.count())
+        .select_from(Message)
+        .outerjoin(Todo, Todo.id == Message.related_id)
+        .where(
+            Message.recipient_user_id == current_user.id,
+            or_(
+                Message.type.in_(COLLAB_MESSAGE_TYPES),
+                and_(
+                    Message.type == "task_completed",
+                    Message.related_type == "todo",
+                    Todo.last_flow_type.in_(COLLAB_FLOW_TYPES),
+                ),
+            ),
+        )
     )
     total = (await db.execute(count_q)).scalar() or 0
     items = (await db.execute(q.offset(offset).limit(size))).scalars().all()
@@ -446,7 +492,7 @@ async def accept_collaboration(request_id: str, db: AsyncSession = Depends(get_d
     todo.owner_id = current_user.id
     todo.target_user_id = current_user.id
     todo.task_flow_type = _resolve_target_execution_mode(todo)
-    todo.last_flow_state = "transferred"
+    todo.last_flow_state = "accepted"
     todo.last_flow_type = "collaboration_accept"
     todo.status = "pending_confirm"
 
@@ -479,7 +525,7 @@ async def accept_collaboration(request_id: str, db: AsyncSession = Depends(get_d
         status_after=todo.status,
         flow_state_before=flow_before,
         flow_state_after=todo.last_flow_state,
-        remark="协作请求已接受，任务已转入目标账户执行模块",
+        remark="协作请求已接受，原账户只读视图状态更新为已接受",
     )
     await db.flush()
     return {"code": 200, "message": "success", "data": None}

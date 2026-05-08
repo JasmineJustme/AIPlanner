@@ -6,6 +6,7 @@ from app.models.base import Base, TimestampMixin
 
 class WAgent(TimestampMixin, Base):
     __tablename__ = "wagents"
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     capability_tags: Mapped[dict | None] = mapped_column(JSON, default=list)
@@ -24,6 +25,7 @@ class WAgent(TimestampMixin, Base):
 class WAgentVersion(TimestampMixin, Base):
     __tablename__ = "wagent_versions"
     __table_args__ = (UniqueConstraint("wagent_id", "version", name="uq_wagent_version"),)
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     wagent_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("wagents.id"), nullable=False
     )

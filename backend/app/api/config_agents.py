@@ -19,10 +19,13 @@ class FetchDifyInfoRequest(BaseModel):
 async def fetch_dify_info(
     payload: FetchDifyInfoRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     from app.services.dify_client import dify_client
 
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "dify_endpoint", SystemSetting.user_id == current_user.id)
+    )
     setting = result.scalar_one_or_none()
     raw = setting.value if setting else None
     if isinstance(raw, dict):
@@ -47,11 +50,16 @@ async def list_agents(
     current_user: User = Depends(get_current_user),
 ):
     offset = (page - 1) * size
-    _ = current_user
-    count_result = await db.execute(select(func.count()).select_from(Agent))
+    count_result = await db.execute(
+        select(func.count()).select_from(Agent).where(Agent.creator_id == current_user.id)
+    )
     total = count_result.scalar() or 0
     result = await db.execute(
-        select(Agent).offset(offset).limit(size).order_by(Agent.created_at.desc())
+        select(Agent)
+        .where(Agent.creator_id == current_user.id)
+        .offset(offset)
+        .limit(size)
+        .order_by(Agent.created_at.desc())
     )
     items = result.scalars().all()
     pages = (total + size - 1) // size if total > 0 else 0
@@ -74,8 +82,7 @@ async def get_agent(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ = current_user
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.creator_id == current_user.id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -89,9 +96,11 @@ async def create_agent(
     current_user: User = Depends(get_current_user),
 ):
     data = payload.model_dump()
-    creator_id = data.get("creator_id") or current_user.id
+    creator_id = current_user.id
 
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "dify_endpoint", SystemSetting.user_id == current_user.id)
+    )
     setting = result.scalar_one_or_none()
     raw = setting.value if setting else None
     if isinstance(raw, dict):
@@ -103,7 +112,9 @@ async def create_agent(
     if not endpoint:
         raise HTTPException(status_code=400, detail="请先在系统设置页配置 dify_endpoint")
 
-    existed = await db.execute(select(Agent).where(Agent.name == data["name"]))
+    existed = await db.execute(
+        select(Agent).where(Agent.name == data["name"], Agent.creator_id == current_user.id)
+    )
     if existed.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Agent 名称已存在，请更换名称")
 
@@ -133,8 +144,7 @@ async def update_agent(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ = current_user
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.creator_id == current_user.id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -146,12 +156,17 @@ async def update_agent(
         if not normalized_name:
             raise HTTPException(status_code=400, detail="Agent 名称不能为空")
         duplicate_result = await db.execute(
-            select(Agent).where(Agent.name == normalized_name, Agent.id != agent_id)
+            select(Agent).where(
+                Agent.name == normalized_name,
+                Agent.id != agent_id,
+                Agent.creator_id == current_user.id,
+            )
         )
         if duplicate_result.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Agent 名称已存在，请更换名称")
         data["name"] = normalized_name
 
+    data.pop("creator_id", None)
     for k, v in data.items():
         if k in ("input_params", "output_params") and v is not None:
             v = [p.model_dump() if hasattr(p, "model_dump") else p for p in v]
@@ -167,8 +182,7 @@ async def delete_agent(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ = current_user
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.creator_id == current_user.id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -182,8 +196,7 @@ async def toggle_agent(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ = current_user
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.creator_id == current_user.id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -199,15 +212,16 @@ async def test_agent(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ = current_user
     import time
     from app.services.dify_client import dify_client
 
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.creator_id == current_user.id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "dify_endpoint", SystemSetting.user_id == current_user.id)
+    )
     setting = result.scalar_one_or_none()
     raw = setting.value if setting else None
     if isinstance(raw, dict):

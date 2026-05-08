@@ -8,7 +8,8 @@ from app.models.base import Base, TimestampMixin
 
 class DataSource(TimestampMixin, Base):
     __tablename__ = "datasources"
-    type: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    type: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     agent_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True

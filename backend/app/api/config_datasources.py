@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import time
 
 from app.database import get_db
-from app.models import Agent, DataSource, SystemSetting
+from app.dependencies.auth import get_current_user
+from app.models import Agent, DataSource, SystemSetting, User
 from app.schemas.datasource import DataSourceCreate, DataSourceUpdate, DataSourceResponse
 from app.services.dify_client import dify_client
 
@@ -24,15 +25,11 @@ def _normalize_params(raw: object) -> list[dict]:
     return []
 
 
-async def _apply_agent_binding(
-    db: AsyncSession,
-    ds: DataSource,
-    agent_id: str | None,
-) -> None:
+async def _apply_agent_binding(db: AsyncSession, ds: DataSource, agent_id: str | None, user_id: str) -> None:
     if not agent_id:
         ds.agent_id = None
         return
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.creator_id == user_id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=400, detail="Selected agent not found")
@@ -69,8 +66,10 @@ def _mark_datasource_check(ds: DataSource, status: str, error: str | None = None
     ds.last_sync_error = error
 
 
-async def _get_system_dify_endpoint(db: AsyncSession) -> str:
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+async def _get_system_dify_endpoint(db: AsyncSession, user_id: str) -> str:
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "dify_endpoint", SystemSetting.user_id == user_id)
+    )
     setting = result.scalar_one_or_none()
     raw = setting.value if setting else None
     if isinstance(raw, dict):
@@ -81,27 +80,25 @@ async def _get_system_dify_endpoint(db: AsyncSession) -> str:
 
 
 @router.get("")
-async def list_datasources(
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(DataSource))
+async def list_datasources(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    result = await db.execute(select(DataSource).where(DataSource.user_id == current_user.id))
     items = result.scalars().all()
-    return {
-        "code": 200,
-        "message": "success",
-        "data": [_serialize_datasource(i) for i in items],
-    }
+    return {"code": 200, "message": "success", "data": [_serialize_datasource(i) for i in items]}
 
 
 @router.post("")
 async def create_datasource(
     payload: DataSourceCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    existing = await db.execute(select(DataSource).where(DataSource.type == payload.type))
+    existing = await db.execute(
+        select(DataSource).where(DataSource.type == payload.type, DataSource.user_id == current_user.id)
+    )
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"数据源类型 '{payload.type}' 已存在")
     ds = DataSource(
+        user_id=current_user.id,
         type=payload.type,
         name=payload.name,
         agent_id=None,
@@ -112,14 +109,10 @@ async def create_datasource(
     )
     db.add(ds)
     if payload.agent_id:
-        await _apply_agent_binding(db, ds, payload.agent_id)
+        await _apply_agent_binding(db, ds, payload.agent_id, current_user.id)
     await db.flush()
     await db.refresh(ds)
-    return {
-        "code": 200,
-        "message": "success",
-        "data": _serialize_datasource(ds),
-    }
+    return {"code": 200, "message": "success", "data": _serialize_datasource(ds)}
 
 
 @router.put("/{ds_type}")
@@ -127,18 +120,28 @@ async def update_datasource(
     ds_type: str,
     payload: DataSourceUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(DataSource).where(DataSource.type == ds_type))
+    result = await db.execute(
+        select(DataSource).where(DataSource.type == ds_type, DataSource.user_id == current_user.id)
+    )
     ds = result.scalar_one_or_none()
     if not ds:
-        ds = DataSource(type=ds_type, name=ds_type, dify_endpoint="", dify_api_key="", input_params=[], output_params=[])
+        ds = DataSource(
+            user_id=current_user.id,
+            type=ds_type,
+            name=ds_type,
+            dify_endpoint="",
+            dify_api_key="",
+            input_params=[],
+            output_params=[],
+        )
         db.add(ds)
         await db.flush()
     data = payload.model_dump(exclude_unset=True)
 
-    # Explicit agent binding has priority and is persisted directly.
     if "agent_id" in data:
-        await _apply_agent_binding(db, ds, data.pop("agent_id"))
+        await _apply_agent_binding(db, ds, data.pop("agent_id"), current_user.id)
 
     if "input_params" in data:
         data["input_params"] = _normalize_params(data["input_params"])
@@ -153,11 +156,10 @@ async def update_datasource(
 
 
 @router.patch("/{ds_type}/toggle")
-async def toggle_datasource(
-    ds_type: str,
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(DataSource).where(DataSource.type == ds_type))
+async def toggle_datasource(ds_type: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    result = await db.execute(
+        select(DataSource).where(DataSource.type == ds_type, DataSource.user_id == current_user.id)
+    )
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Datasource not found")
@@ -168,15 +170,14 @@ async def toggle_datasource(
 
 
 @router.post("/{ds_type}/test")
-async def test_datasource(
-    ds_type: str,
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(DataSource).where(DataSource.type == ds_type))
+async def test_datasource(ds_type: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    result = await db.execute(
+        select(DataSource).where(DataSource.type == ds_type, DataSource.user_id == current_user.id)
+    )
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Datasource not found")
-    endpoint = await _get_system_dify_endpoint(db)
+    endpoint = await _get_system_dify_endpoint(db, current_user.id)
     if not endpoint:
         _mark_datasource_check(ds, "failed", "系统设置页未配置 dify_endpoint")
         await db.flush()
@@ -194,23 +195,14 @@ async def test_datasource(
 
     _mark_datasource_check(ds, "success", None)
     await db.flush()
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "connected": True,
-            "latency_ms": latency_ms,
-            "status_code": test_result.get("status_code"),
-        },
-    }
+    return {"code": 200, "message": "success", "data": {"connected": True, "latency_ms": latency_ms, "status_code": test_result.get("status_code")}}
 
 
 @router.post("/{ds_type}/sync")
-async def sync_datasource(
-    ds_type: str,
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(DataSource).where(DataSource.type == ds_type))
+async def sync_datasource(ds_type: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    result = await db.execute(
+        select(DataSource).where(DataSource.type == ds_type, DataSource.user_id == current_user.id)
+    )
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Datasource not found")
@@ -221,11 +213,10 @@ async def sync_datasource(
 
 
 @router.delete("/{ds_type}")
-async def delete_datasource(
-    ds_type: str,
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(DataSource).where(DataSource.type == ds_type))
+async def delete_datasource(ds_type: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    result = await db.execute(
+        select(DataSource).where(DataSource.type == ds_type, DataSource.user_id == current_user.id)
+    )
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Datasource not found")

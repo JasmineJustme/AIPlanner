@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Planner 示例页面</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #1f2937;
+      background: #f5f7fb;
+    }
+    .app { display: flex; min-height: 100vh; }
+    .sider {
+      width: 240px;
+      flex-shrink: 0;
+      background: #001529;
+      color: rgba(255,255,255,.78);
+      display: flex;
+      flex-direction: column;
+    }
+    .logo {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: .3px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .menu { padding: 10px 8px 24px; overflow-y: auto; }
+    .menu-group { margin-bottom: 6px; }
+    .menu-title,
+    .menu-item {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all .2s ease;
+      font-size: 14px;
+    }
+    .menu-title:hover,
+    .menu-item:hover { color: #fff; background: rgba(255,255,255,.10); }
+    .menu-title.active,
+    .menu-item.active { color: #fff; background: #1677ff; }
+    .menu-title .chevron { margin-left: auto; font-size: 11px; opacity: .75; }
+    .submenu { padding: 2px 0 4px 18px; }
+    .submenu .menu-item { height: 36px; padding-left: 18px; font-size: 13px; }
+    .icon { width: 18px; display: inline-flex; justify-content: center; }
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .header {
+      height: 56px;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      z-index: 2;
+    }
+    .header-left { display: flex; align-items: center; gap: 22px; }
+    .trigger { font-size: 19px; color: #334155; }
+    .search {
+      width: 360px;
+      height: 34px;
+      border: 1px solid #d9e1ec;
+      border-radius: 18px;
+      padding: 0 16px;
+      color: #64748b;
+      background: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .header-right { display: flex; align-items: center; gap: 18px; color: #334155; }
+    .badge { position: relative; font-size: 19px; }
+    .badge::after {
+      content: "3";
+      position: absolute;
+      top: -8px;
+      right: -10px;
+      min-width: 17px;
+      height: 17px;
+      border-radius: 9px;
+      background: #ff4d4f;
+      color: #fff;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #fff;
+    }
+    .user { display: flex; align-items: center; gap: 8px; }
+    .avatar {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: #e6f4ff; color: #1677ff;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700;
+    }
+    .content { padding: 24px; min-height: calc(100vh - 56px); overflow-y: auto; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .page-title { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+    h1 { margin: 0; font-size: 24px; color: #0f172a; }
+    .sub { margin-top: 8px; color: #64748b; font-size: 14px; }
+    .btn {
+      border: 0; border-radius: 8px; padding: 9px 16px;
+      background: #1677ff; color: #fff; font-weight: 600; cursor: pointer;
+      box-shadow: 0 6px 14px rgba(22,119,255,.18);
+    }
+    .btn.secondary { background: #fff; color: #1677ff; border: 1px solid #b9d8ff; box-shadow: none; }
+    .grid { display: grid; gap: 16px; }
+    .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card {
+      background: #fff; border-radius: 12px; padding: 18px;
+      border: 1px solid #edf1f7;
+      box-shadow: 0 6px 18px rgba(15,23,42,.04);
+    }
+    .metric { color: #64748b; font-size: 13px; }
+    .metric strong { display: block; margin-top: 10px; color: #0f172a; font-size: 28px; }
+    .table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; }
+    .table th, .table td { padding: 14px 16px; border-bottom: 1px solid #eef2f7; text-align: left; font-size: 14px; }
+    .table th { background: #fafcff; color: #475569; font-weight: 600; }
+    .tag { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-size: 12px; }
+    .green { background: #f0fdf4; color: #15803d; }
+    .blue { background: #eff6ff; color: #1d4ed8; }
+    .orange { background: #fff7ed; color: #c2410c; }
+    .gray { background: #f1f5f9; color: #475569; }
+    .chat-wrap { display: grid; grid-template-columns: 280px 1fr; gap: 16px; min-height: 660px; }
+    .chat-list { background: #fff; border-radius: 12px; border: 1px solid #edf1f7; padding: 12px; }
+    .chat-session { padding: 13px; border-radius: 10px; margin-bottom: 8px; cursor: pointer; }
+    .chat-session.active { background: #e6f4ff; color: #0958d9; }
+    .chat-box { background: #fff; border-radius: 12px; border: 1px solid #edf1f7; display: flex; flex-direction: column; overflow: hidden; }
+    .chat-head { padding: 16px 20px; border-bottom: 1px solid #eef2f7; font-weight: 700; }
+    .messages { flex: 1; padding: 22px; background: #fbfdff; }
+    .msg { max-width: 70%; padding: 12px 14px; border-radius: 12px; margin-bottom: 14px; line-height: 1.55; font-size: 14px; }
+    .msg.agent { background: #fff; border: 1px solid #e5eaf2; }
+    .msg.user { margin-left: auto; background: #1677ff; color: #fff; }
+    .chat-input { padding: 14px; border-top: 1px solid #eef2f7; display: flex; gap: 10px; }
+    .chat-input input { flex: 1; border: 1px solid #d9e1ec; border-radius: 8px; padding: 0 12px; }
+    .agent-row { display: grid; grid-template-columns: 1.2fr .7fr 1.8fr .8fr; gap: 12px; align-items: center; padding: 16px 0; border-bottom: 1px solid #eef2f7; }
+    .agent-row:last-child { border-bottom: 0; }
+    .agent-name { font-weight: 700; color: #0f172a; }
+    .progress { height: 8px; background: #eaf0f7; border-radius: 999px; overflow: hidden; margin-top: 8px; }
+    .bar { height: 100%; border-radius: 999px; background: #1677ff; }
+    .upload { border: 1px dashed #91caff; background: #f0f7ff; border-radius: 12px; padding: 24px; text-align: center; color: #0958d9; }
+    .skill-card { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    .skill-title { font-weight: 700; margin-bottom: 7px; }
+    .delete { color: #ff4d4f; background: #fff1f0; border: 1px solid #ffccc7; border-radius: 7px; padding: 6px 10px; cursor: pointer; }
+    .form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; margin-top: 16px; }
+    .form input, .form select { height: 38px; border: 1px solid #d9e1ec; border-radius: 8px; padding: 0 12px; }
+    @media (max-width: 980px) {
+      .sider { width: 210px; }
+      .search { width: 220px; }
+      .grid.cols-3, .grid.cols-2, .chat-wrap { grid-template-columns: 1fr; }
+      .agent-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sider">
+      <div class="logo">AI Planner</div>
+      <nav class="menu">
+        <section class="menu-group">
+          <div class="menu-title active" data-page="dashboard"><span class="icon">▦</span>Agent Planner<span class="chevron">▾</span></div>
+          <div class="submenu">
+            <div class="menu-item active" data-page="dashboard">Dashboard 总览</div>
+            <div class="menu-item" data-page="todos">待办任务</div>
+            <div class="menu-item" data-page="orchestration">智能编排</div>
+            <div class="menu-item" data-page="scheduling">调度监控</div>
+            <div class="menu-item" data-page="history">执行历史</div>
+          </div>
+        </section>
+        <section class="menu-group">
+          <div class="menu-title" data-page="digital-chat"><span class="icon">◎</span>数字人 Planner<span class="chevron">▾</span></div>
+          <div class="submenu">
+            <div class="menu-item" data-page="digital-chat">聊天对话</div>
+            <div class="menu-item" data-page="agent-usage">Agent 使用情况</div>
+            <div class="menu-item" data-page="skills-config">Agent 配置</div>
+          </div>
+        </section>
+        <section class="menu-group">
+          <div class="menu-title" data-page="config"><span class="icon">⚙</span>配置中心<span class="chevron">▾</span></div>
+          <div class="submenu">
+            <div class="menu-item" data-page="config">Agent 管理</div>
+            <div class="menu-item" data-page="datasource">数据源配置</div>
+            <div class="menu-item" data-page="responsibility">工作职责配置</div>
+            <div class="menu-item" data-page="llm">大模型配置</div>
+          </div>
+        </section>
+        <div class="menu-item" data-page="messages"><span class="icon">✉</span>消息中心</div>
+        <section class="menu-group">
+          <div class="menu-title" data-page="system"><span class="icon">⌘</span>系统<span class="chevron">▾</span></div>
+          <div class="submenu">
+            <div class="menu-item" data-page="system">系统设置</div>
+            <div class="menu-item" data-page="audit">操作审计日志</div>
+            <div class="menu-item" data-page="prefs">提醒偏好设置</div>
+          </div>
+        </section>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="header">
+        <div class="header-left">
+          <span class="trigger">☰</span>
+          <div class="search">⌕ 搜索任务、Agent、配置项</div>
+        </div>
+        <div class="header-right">
+          <span class="badge">🔔</span>
+          <div class="user"><span class="avatar">U</span><span>用户</span></div>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="page active" id="dashboard">
+          <div class="page-title"><div><h1>Dashboard 总览</h1><div class="sub">Agent Planner 汇总原工作台、智能处理及其子功能。</div></div><button class="btn">新建任务</button></div>
+          <div class="grid cols-3">
+            <div class="card metric">待办任务<strong>18</strong></div>
+            <div class="card metric">运行中编排<strong>7</strong></div>
+            <div class="card metric">今日完成<strong>42</strong></div>
+          </div>
+          <div class="card" style="margin-top:16px"><h3>近期任务</h3><table class="table"><tr><th>任务</th><th>负责人 Agent</th><th>状态</th><th>更新时间</th></tr><tr><td>月度审计底稿核对</td><td>审计 Agent</td><td><span class="tag blue">处理中</span></td><td>10:24</td></tr><tr><td>异常凭证筛查</td><td>风控 Agent</td><td><span class="tag green">已完成</span></td><td>09:48</td></tr><tr><td>部门预算检查</td><td>财务 Agent</td><td><span class="tag orange">待确认</span></td><td>09:12</td></tr></table></div>
+        </div>
+
+        <div class="page" id="todos"><div class="page-title"><div><h1>待办任务</h1><div class="sub">展示需要人工确认、补充资料或复核的事项。</div></div></div><div class="card"><table class="table"><tr><th>事项</th><th>优先级</th><th>来源</th><th>状态</th></tr><tr><td>确认销售合同抽样范围</td><td>高</td><td>智能编排</td><td><span class="tag orange">待处理</span></td></tr><tr><td>补充供应商发票附件</td><td>中</td><td>调度监控</td><td><span class="tag gray">待上传</span></td></tr></table></div></div>
+        <div class="page" id="orchestration"><div class="page-title"><div><h1>智能编排</h1><div class="sub">面向审计流程的任务拆解、Agent 编排与人工确认节点。</div></div><button class="btn">创建编排</button></div><div class="grid cols-2"><div class="card"><h3>合同审计流程</h3><p>资料读取 → 风险识别 → 交叉验证 → 报告生成</p><span class="tag blue">运行中</span></div><div class="card"><h3>费用报销检查</h3><p>票据识别 → 规则校验 → 异常汇总</p><span class="tag green">可用</span></div></div></div>
+        <div class="page" id="scheduling"><div class="page-title"><div><h1>调度监控</h1><div class="sub">查看当前任务队列、运行进度与资源占用。</div></div></div><div class="card"><div class="agent-row"><div class="agent-name">审计抽样任务</div><span class="tag blue">运行中</span><div>当前处理第 4/9 个样本<div class="progress"><div class="bar" style="width:44%"></div></div></div><span>44%</span></div><div class="agent-row"><div class="agent-name">报表一致性检查</div><span class="tag orange">排队中</span><div>等待凭证解析任务完成</div><span>待调度</span></div></div></div>
+        <div class="page" id="history"><div class="page-title"><div><h1>执行历史</h1><div class="sub">追踪历史任务执行结果、耗时与产出文件。</div></div></div><div class="card"><table class="table"><tr><th>执行记录</th><th>结果</th><th>耗时</th><th>完成时间</th></tr><tr><td>经营数据核验</td><td><span class="tag green">成功</span></td><td>12m</td><td>昨天 18:40</td></tr><tr><td>合同关键条款提取</td><td><span class="tag green">成功</span></td><td>8m</td><td>昨天 16:05</td></tr></table></div></div>
+
+        <div class="page" id="digital-chat">
+          <div class="page-title"><div><h1>数字人 Planner · 聊天对话</h1><div class="sub">通过自然语言与数字人 Planner 沟通，发起任务、查询状态或获取建议。</div></div></div>
+          <div class="chat-wrap">
+            <div class="chat-list"><div class="chat-session active"><strong>审计计划咨询</strong><br><small>刚刚更新</small></div><div class="chat-session"><strong>凭证异常说明</strong><br><small>昨天</small></div><div class="chat-session"><strong>预算执行分析</strong><br><small>周一</small></div></div>
+            <div class="chat-box"><div class="chat-head">数字人 Planner</div><div class="messages"><div class="msg agent">您好，我可以帮助您规划审计流程、调度 Agent，并解释当前任务进展。</div><div class="msg user">请帮我查看本周审计 Agent 的工作安排。</div><div class="msg agent">本周审计 Agent 正在执行 3 项任务，其中“月度审计底稿核对”正在工作，当前正在比对银行流水与总账记录。</div></div><div class="chat-input"><input placeholder="输入消息，例如：创建一个合同审计任务" /><button class="btn">发送</button></div></div>
+          </div>
+        </div>
+
+        <div class="page" id="agent-usage">
+          <div class="page-title"><div><h1>数字人 Planner · Agent 使用情况</h1><div class="sub">显示当前已配置 Agent 状态、是否正在工作以及当前工作内容。</div></div><button class="btn secondary">刷新状态</button></div>
+          <div class="grid cols-3"><div class="card metric">已配置 Agent<strong>6</strong></div><div class="card metric">正在工作<strong>3</strong></div><div class="card metric">空闲 Agent<strong>3</strong></div></div>
+          <div class="card" style="margin-top:16px">
+            <div class="agent-row"><div><div class="agent-name">审计 Agent</div><small>负责底稿核验、抽样检查</small></div><span class="tag blue">正在工作</span><div>当前工作：比对银行流水与总账记录，识别金额差异</div><div>已运行 18m</div></div>
+            <div class="agent-row"><div><div class="agent-name">风控 Agent</div><small>负责异常规则与风险评分</small></div><span class="tag blue">正在工作</span><div>当前工作：扫描高风险供应商交易，生成风险清单</div><div>已运行 9m</div></div>
+            <div class="agent-row"><div><div class="agent-name">报表 Agent</div><small>负责报表生成与格式校验</small></div><span class="tag green">空闲</span><div>当前无工作，可接收新任务</div><div>-</div></div>
+            <div class="agent-row"><div><div class="agent-name">知识库 Agent</div><small>负责制度问答与文档检索</small></div><span class="tag orange">正在工作</span><div>当前工作：索引新上传的审计制度文档</div><div>已运行 4m</div></div>
+          </div>
+        </div>
+
+        <div class="page" id="skills-config">
+          <div class="page-title"><div><h1>数字人 Planner · Agent 配置</h1><div class="sub">管理 Skills：支持上传文档配置 Skills，并删除已配置 Skills。</div></div><button class="btn">保存配置</button></div>
+          <div class="grid cols-2">
+            <div class="card"><h3>上传文档配置 Skills</h3><div class="upload">点击或拖拽文档到此处上传<br><small>支持 PDF、DOCX、XLSX、Markdown，用于生成或更新 Agent Skills</small></div><div class="form"><input placeholder="Skill 名称，例如：合同审计 Skill" /><select><option>绑定到审计 Agent</option><option>绑定到风控 Agent</option><option>绑定到知识库 Agent</option></select><button class="btn">生成 Skill</button></div></div>
+            <div class="card"><h3>已配置 Skills</h3><div class="skill-card"><div><div class="skill-title">合同关键条款识别</div><div class="sub">从合同文档中提取付款、交付、违约等关键条款。</div><span class="tag green">启用中</span></div><button class="delete">删除</button></div><hr style="border:0;border-top:1px solid #eef2f7;margin:16px 0"><div class="skill-card"><div><div class="skill-title">凭证异常检查</div><div class="sub">根据规则库识别发票、凭证和报销单据中的异常。</div><span class="tag green">启用中</span></div><button class="delete">删除</button></div><hr style="border:0;border-top:1px solid #eef2f7;margin:16px 0"><div class="skill-card"><div><div class="skill-title">审计制度问答</div><div class="sub">基于上传制度文档回答审计流程与标准问题。</div><span class="tag gray">待更新</span></div><button class="delete">删除</button></div></div>
+          </div>
+        </div>
+
+        <div class="page" id="config"><div class="page-title"><div><h1>配置中心</h1><div class="sub">保留当前平台配置中心的 Agent、数据源、职责、大模型等配置能力。</div></div></div><div class="grid cols-3"><div class="card">Agent 管理</div><div class="card">数据源配置</div><div class="card">工作职责配置</div></div></div>
+        <div class="page" id="datasource"><div class="page-title"><div><h1>数据源配置</h1><div class="sub">配置数据库、文件存储与业务系统连接。</div></div></div><div class="card">示例数据源：财务系统、OA 系统、合同库。</div></div>
+        <div class="page" id="responsibility"><div class="page-title"><div><h1>工作职责配置</h1><div class="sub">维护组织、角色与 Agent 责任边界。</div></div></div><div class="card">职责矩阵示例。</div></div>
+        <div class="page" id="llm"><div class="page-title"><div><h1>大模型配置</h1><div class="sub">配置模型供应商、密钥与调用策略。</div></div></div><div class="card">模型配置示例。</div></div>
+        <div class="page" id="messages"><div class="page-title"><div><h1>消息中心</h1><div class="sub">汇总系统通知、任务确认和调度提醒。</div></div></div><div class="card"><table class="table"><tr><th>消息</th><th>类型</th><th>时间</th></tr><tr><td>审计 Agent 请求确认抽样范围</td><td>任务确认</td><td>10:20</td></tr><tr><td>报表 Agent 已完成日报生成</td><td>完成提醒</td><td>09:30</td></tr></table></div></div>
+        <div class="page" id="system"><div class="page-title"><div><h1>系统设置</h1><div class="sub">系统基础参数、权限与安全策略。</div></div></div><div class="card">系统设置示例。</div></div>
+        <div class="page" id="audit"><div class="page-title"><div><h1>操作审计日志</h1><div class="sub">记录用户操作与系统关键事件。</div></div></div><div class="card">审计日志示例。</div></div>
+        <div class="page" id="prefs"><div class="page-title"><div><h1>提醒偏好设置</h1><div class="sub">配置消息、邮件和企业微信提醒规则。</div></div></div><div class="card">提醒偏好示例。</div></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const navItems = document.querySelectorAll('[data-page]');
+    const pages = document.querySelectorAll('.page');
+    function switchPage(pageId) {
+      pages.forEach(page => page.classList.toggle('active', page.id === pageId));
+      navItems.forEach(item => item.classList.toggle('active', item.dataset.page === pageId));
+    }
+    navItems.forEach(item => item.addEventListener('click', () => switchPage(item.dataset.page)));
+  </script>
+</body>
+</html>

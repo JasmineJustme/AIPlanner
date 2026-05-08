@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, or_
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -37,6 +37,15 @@ async def list_messages(
         todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
         q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
         count_q = count_q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+    q = q.outerjoin(Todo, and_(Message.related_type == "todo", Message.related_id == Todo.id))
+    count_q = count_q.outerjoin(Todo, and_(Message.related_type == "todo", Message.related_id == Todo.id))
+    exclude_flow_completed = and_(
+        Message.type == "task_completed",
+        Message.related_type == "todo",
+        Todo.last_flow_type.in_(["dispatch", "collaboration", "collaboration_accept"]),
+    )
+    q = q.where(not_(exclude_flow_completed))
+    count_q = count_q.where(not_(exclude_flow_completed))
     if status:
         q = q.where(Message.status == status)
         count_q = count_q.where(Message.status == status)

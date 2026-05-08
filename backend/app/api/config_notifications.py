@@ -5,7 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Agent, NotificationChannel, SystemSetting
+from app.dependencies.auth import get_current_user
+from app.models import Agent, NotificationChannel, SystemSetting, User
 from app.schemas.notification_channel import (
     NotificationChannelCreate,
     NotificationChannelResponse,
@@ -100,8 +101,9 @@ async def _apply_agent_binding(
     ch: NotificationChannel,
     agent_id: str,
     input_params: list[dict] | None,
+    user_id: str,
 ) -> None:
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.creator_id == user_id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=400, detail="Selected agent not found")
@@ -155,11 +157,12 @@ def _serialize_channel(ch: NotificationChannel) -> NotificationChannelResponse:
     return NotificationChannelResponse.model_validate(payload)
 
 
-async def _get_channel_by_type(db: AsyncSession, channel_type: str) -> NotificationChannel | None:
+async def _get_channel_by_type(db: AsyncSession, channel_type: str, user_id: str) -> NotificationChannel | None:
     normalized = _normalize_channel_type(channel_type)
     result = await db.execute(
         select(NotificationChannel).where(
-            NotificationChannel.channel_type.in_([normalized, channel_type])
+            NotificationChannel.user_id == user_id,
+            NotificationChannel.channel_type.in_([normalized, channel_type]),
         )
     )
     rows = result.scalars().all()
@@ -170,8 +173,10 @@ async def _get_channel_by_type(db: AsyncSession, channel_type: str) -> Notificat
     return exact or rows[0]
 
 
-async def _get_system_dify_endpoint(db: AsyncSession) -> str:
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "dify_endpoint"))
+async def _get_system_dify_endpoint(db: AsyncSession, user_id: str) -> str:
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "dify_endpoint", SystemSetting.user_id == user_id)
+    )
     setting = result.scalar_one_or_none()
     raw = setting.value if setting else None
     if isinstance(raw, dict):
@@ -184,8 +189,9 @@ async def _get_system_dify_endpoint(db: AsyncSession) -> str:
 @router.get("")
 async def list_notification_channels(
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(NotificationChannel))
+    result = await db.execute(select(NotificationChannel).where(NotificationChannel.user_id == current_user.id))
     items = result.scalars().all()
 
     alias_rows: dict[str, NotificationChannel] = {}
@@ -223,10 +229,11 @@ async def list_notification_channels(
 async def create_channel(
     payload: NotificationChannelCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     channel_type = _validate_channel_type(payload.channel_type)
 
-    existing = await _get_channel_by_type(db, channel_type)
+    existing = await _get_channel_by_type(db, channel_type, current_user.id)
     if existing:
         raise HTTPException(status_code=400, detail=f"提醒渠道类型 '{channel_type}' 已存在")
 
@@ -238,6 +245,7 @@ async def create_channel(
     agent_id = data.pop("agent_id", None)
 
     ch = NotificationChannel(
+        user_id=current_user.id,
         channel_type=channel_type,
         name=str(data.get("name") or channel_type),
         dify_endpoint="",
@@ -249,7 +257,7 @@ async def create_channel(
     await db.flush()
 
     if agent_id:
-        await _apply_agent_binding(db, ch, str(agent_id), input_params)
+        await _apply_agent_binding(db, ch, str(agent_id), input_params, current_user.id)
     elif input_params is not None:
         ch.input_mapping = {"input_params": input_params}
 
@@ -265,11 +273,13 @@ async def update_channel(
     channel_type: str,
     payload: NotificationChannelUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     channel_type = _validate_channel_type(channel_type)
-    ch = await _get_channel_by_type(db, channel_type)
+    ch = await _get_channel_by_type(db, channel_type, current_user.id)
     if not ch:
         ch = NotificationChannel(
+            user_id=current_user.id,
             channel_type=channel_type,
             name=channel_type,
             dify_endpoint="",
@@ -287,7 +297,7 @@ async def update_channel(
     message_field = str(message_field_raw).strip() if message_field_raw else None
 
     if agent_id:
-        await _apply_agent_binding(db, ch, str(agent_id), input_params)
+        await _apply_agent_binding(db, ch, str(agent_id), input_params, current_user.id)
     elif input_params is not None:
         existing = ch.input_mapping if isinstance(ch.input_mapping, dict) else {}
         existing["input_params"] = input_params
@@ -307,9 +317,10 @@ async def update_channel(
 async def toggle_channel(
     channel_type: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     channel_type = _validate_channel_type(channel_type)
-    ch = await _get_channel_by_type(db, channel_type)
+    ch = await _get_channel_by_type(db, channel_type, current_user.id)
     if not ch:
         raise HTTPException(status_code=404, detail="Channel not found")
     ch.is_enabled = not ch.is_enabled
@@ -322,16 +333,17 @@ async def toggle_channel(
 async def test_channel(
     channel_type: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     import time
     from app.services.dify_client import dify_client
 
     channel_type = _validate_channel_type(channel_type)
-    ch = await _get_channel_by_type(db, channel_type)
+    ch = await _get_channel_by_type(db, channel_type, current_user.id)
     if not ch:
         raise HTTPException(status_code=404, detail="Channel not found")
 
-    endpoint = await _get_system_dify_endpoint(db)
+    endpoint = await _get_system_dify_endpoint(db, current_user.id)
     if not endpoint:
         raise HTTPException(status_code=400, detail="系统设置页未配置 dify_endpoint")
     if not ch.dify_api_key:
@@ -359,15 +371,14 @@ async def test_channel(
 async def delete_channel(
     channel_type: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     channel_type = _validate_channel_type(channel_type)
 
-    ch = await _get_channel_by_type(db, channel_type)
+    ch = await _get_channel_by_type(db, channel_type, current_user.id)
     if not ch:
         raise HTTPException(status_code=404, detail="Channel not found")
 
     await db.delete(ch)
     await db.flush()
     return {"code": 200, "message": "success", "data": None}
-
-

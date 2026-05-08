@@ -70,7 +70,7 @@ class SubmitPayload(BaseModel):
 def _can_access_todo(current_user: User, todo: Todo) -> bool:
     if getattr(current_user, "is_superuser", False):
         return True
-    return todo.creator_id == current_user.id
+    return todo.owner_id == current_user.id
 
 
 def _can_access_orchestration(current_user: User, orch: Orchestration) -> bool:
@@ -814,7 +814,7 @@ async def submit_orchestration(
     if not getattr(current_user, "is_superuser", False):
         unauthorized = [todo.title for todo in todos if not _can_access_todo(current_user, todo)]
         if unauthorized:
-            raise HTTPException(status_code=403, detail="仅可编排自己创建的待办任务")
+            raise HTTPException(status_code=403, detail="仅可编排当前用户拥有的待办任务")
 
     if not todos:
         raise HTTPException(status_code=400, detail="未找到对应的待办任务")
@@ -1089,12 +1089,22 @@ async def modify_agent(
     selected_name = payload.get("recommended_name")
 
     if plan_type == "agent":
-        target = await db.get(Agent, recommended_id) if recommended_id else None
+        target = None
+        if recommended_id:
+            q = select(Agent).where(Agent.id == recommended_id)
+            if not getattr(current_user, "is_superuser", False):
+                q = q.where(Agent.creator_id == current_user.id)
+            target = (await db.execute(q)).scalar_one_or_none()
         if recommended_id and not target:
             raise HTTPException(status_code=404, detail="Agent 不存在")
         selected_name = selected_name or (target.name if target else "")
     elif plan_type in {"wagent", "new_wagent"}:
-        target = await db.get(WAgent, recommended_id) if recommended_id else None
+        target = None
+        if recommended_id:
+            q = select(WAgent).where(WAgent.id == recommended_id)
+            if not getattr(current_user, "is_superuser", False):
+                q = q.where(WAgent.user_id == current_user.id)
+            target = (await db.execute(q)).scalar_one_or_none()
         if recommended_id and not target:
             raise HTTPException(status_code=404, detail="W-Agent 不存在")
         selected_name = selected_name or (target.name if target else "")

@@ -7,6 +7,7 @@ from app.models.base import Base, TimestampMixin
 class Responsibility(TimestampMixin, Base):
     __tablename__ = "responsibilities"
 
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True, index=True)
     parent_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("responsibilities.id", ondelete="CASCADE"), nullable=True, index=True
     )

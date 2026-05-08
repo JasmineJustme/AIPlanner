@@ -213,8 +213,22 @@ export default function TodoFlowsPage() {
       dataIndex: 'last_flow_state',
       key: 'last_flow_state',
       render: (v) => {
-        const text = v === 'completed' ? '已完成' : v === 'requesting' ? '请求中' : '已移交';
-        const color = v === 'completed' ? 'success' : v === 'requesting' ? 'warning' : 'processing';
+        const text =
+          v === 'completed'
+            ? '已完成'
+            : v === 'requesting'
+              ? '请求中'
+              : v === 'accepted'
+                ? '已接受'
+                : '已移交';
+        const color =
+          v === 'completed'
+            ? 'success'
+            : v === 'requesting'
+              ? 'warning'
+              : v === 'accepted'
+                ? 'blue'
+                : 'processing';
         return <Tag color={color}>{text}</Tag>;
       },
     },

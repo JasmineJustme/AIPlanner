@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models import (
     Agent,
     Workflow,
@@ -17,6 +18,7 @@ from app.models import (
     SystemSetting,
     NotificationPref,
     NotificationGlobalPref,
+    User,
 )
 
 router = APIRouter(prefix="/config", tags=["config-import-export"])
@@ -33,6 +35,15 @@ SECTION_MODELS: list[tuple[str, str, type]] = [
     ("notification_prefs", "通知偏好", NotificationPref),
     ("notification_global_prefs", "全局通知偏好", NotificationGlobalPref),
 ]
+
+
+def _owner_field(model: type) -> str | None:
+    cols = {c.key for c in model.__table__.columns}
+    if "creator_id" in cols:
+        return "creator_id"
+    if "user_id" in cols:
+        return "user_id"
+    return None
 
 
 def _to_dict(obj):
@@ -65,7 +76,6 @@ def _boolean_cols(model) -> set[str]:
 
 
 def _coerce_values(item: dict, dt_cols: set[str], bool_cols: set[str]) -> dict:
-    """Convert JSON string values back to proper Python types for SQLAlchemy."""
     result = {}
     for k, v in item.items():
         if k in dt_cols:
@@ -93,12 +103,14 @@ def _coerce_values(item: dict, dt_cols: set[str], bool_cols: set[str]) -> dict:
 
 
 @router.get("/export")
-async def export_configs(
-    db: AsyncSession = Depends(get_db),
-):
+async def export_configs(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     data = {}
     for key, _label, model in SECTION_MODELS:
-        rows = (await db.execute(select(model))).scalars().all()
+        q = select(model)
+        owner = _owner_field(model)
+        if owner:
+            q = q.where(getattr(model, owner) == current_user.id)
+        rows = (await db.execute(q)).scalars().all()
         data[key] = [_to_dict(r) for r in rows]
     return {"code": 200, "message": "success", "data": data}
 
@@ -107,6 +119,7 @@ async def export_configs(
 async def preview_import(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     content = await file.read()
     try:
@@ -124,7 +137,11 @@ async def preview_import(
             file_items = []
         file_count = len(file_items)
 
-        existing_rows = (await db.execute(select(model))).scalars().all()
+        q = select(model)
+        owner = _owner_field(model)
+        if owner:
+            q = q.where(getattr(model, owner) == current_user.id)
+        existing_rows = (await db.execute(q)).scalars().all()
         existing_count = len(existing_rows)
 
         pk = _pk_name(model)
@@ -153,6 +170,7 @@ async def import_configs(
     sections: str = Form(""),
     mode: str = Form("merge"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     content = await file.read()
     try:
@@ -170,7 +188,7 @@ async def import_configs(
     result = {}
     errors = []
 
-    for key, label, model in SECTION_MODELS:
+    for key, _label, model in SECTION_MODELS:
         if selected_sections is not None and key not in selected_sections:
             continue
 
@@ -183,73 +201,61 @@ async def import_configs(
         pk = _pk_name(model)
         dt_cols = _datetime_cols(model)
         bool_cols = _boolean_cols(model)
+        owner = _owner_field(model)
         added = 0
         updated = 0
         skipped = 0
 
         if mode == "replace":
-            existing = (await db.execute(select(model))).scalars().all()
+            q = select(model)
+            if owner:
+                q = q.where(getattr(model, owner) == current_user.id)
+            existing = (await db.execute(q)).scalars().all()
             for row in existing:
                 await db.delete(row)
             await db.flush()
 
-            for item in items:
-                if not isinstance(item, dict):
-                    skipped += 1
-                    continue
-                filtered = {k: v for k, v in item.items() if k in cols}
-                if not filtered:
-                    skipped += 1
-                    continue
-                filtered = _coerce_values(filtered, dt_cols, bool_cols)
-                try:
-                    obj = model(**filtered)
-                    db.add(obj)
-                    added += 1
-                except Exception as e:
-                    logger.warning(f"Import replace error in {key}: {e}")
-                    skipped += 1
-            try:
-                await db.flush()
-            except Exception as e:
-                logger.error(f"Import flush error in {key} (replace): {e}")
-                await db.rollback()
-                errors.append({"section": key, "error": str(e)})
-        else:
-            for item in items:
-                if not isinstance(item, dict):
-                    skipped += 1
-                    continue
-                filtered = {k: v for k, v in item.items() if k in cols}
-                if not filtered:
-                    skipped += 1
-                    continue
-                filtered = _coerce_values(filtered, dt_cols, bool_cols)
+        for item in items:
+            if not isinstance(item, dict):
+                skipped += 1
+                continue
+            filtered = {k: v for k, v in item.items() if k in cols}
+            if not filtered:
+                skipped += 1
+                continue
+            filtered = _coerce_values(filtered, dt_cols, bool_cols)
+            if owner:
+                filtered[owner] = current_user.id
 
-                pk_value = filtered.get(pk)
-                if pk_value:
-                    existing_obj = await db.get(model, pk_value)
-                    if existing_obj:
-                        for attr_key, attr_val in filtered.items():
-                            if attr_key != pk:
-                                setattr(existing_obj, attr_key, attr_val)
-                        updated += 1
-                        continue
+            pk_value = filtered.get(pk)
+            existing_obj = None
+            if pk_value:
+                obj = await db.get(model, pk_value)
+                if obj is not None:
+                    if owner and getattr(obj, owner, None) != current_user.id:
+                        obj = None
+                existing_obj = obj
 
-                try:
-                    obj = model(**filtered)
-                    db.add(obj)
-                    added += 1
-                except Exception as e:
-                    logger.warning(f"Import merge error in {key}: {e}")
-                    skipped += 1
+            if existing_obj and mode != "replace":
+                for attr_key, attr_val in filtered.items():
+                    if attr_key != pk:
+                        setattr(existing_obj, attr_key, attr_val)
+                updated += 1
+                continue
 
             try:
-                await db.flush()
+                db.add(model(**filtered))
+                added += 1
             except Exception as e:
-                logger.error(f"Import flush error in {key} (merge): {e}")
-                await db.rollback()
-                errors.append({"section": key, "error": str(e)})
+                logger.warning(f"Import error in {key}: {e}")
+                skipped += 1
+
+        try:
+            await db.flush()
+        except Exception as e:
+            logger.error(f"Import flush error in {key}: {e}")
+            await db.rollback()
+            errors.append({"section": key, "error": str(e)})
 
         result[key] = {"added": added, "updated": updated, "skipped": skipped}
 
