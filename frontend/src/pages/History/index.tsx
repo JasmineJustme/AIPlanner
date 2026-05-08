@@ -163,7 +163,7 @@ export default function HistoryPage() {
 
   const columns: ColumnsType<HistoryItem> = [
     {
-      title: 'Agent/W-Agent名称',
+      title: 'Agent名称',
       key: 'agent_name',
       render: (_, r) => r.wagent_name || r.agent_name || '-',
     },

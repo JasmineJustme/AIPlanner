@@ -670,6 +670,7 @@ async def _process_analysis(
     orch_id: str,
     todo_ids: list[str],
     recurrence_defaults: dict,
+    current_user_id: str | None = None,
 ) -> tuple[str, str | None]:
     """Core analysis logic – callable from tests with any DB session.
 
@@ -684,7 +685,7 @@ async def _process_analysis(
     error_msg: str | None = None
 
     try:
-        plan_result = await orchestrator.orchestrate(db, todo_ids)
+        plan_result = await orchestrator.orchestrate(db, todo_ids, current_user_id)
 
         if "error" in plan_result:
             event_status = _mark_analysis_error(orch, plan_result["error"])
@@ -714,6 +715,7 @@ async def _run_orchestration_analysis(
     orch_id: str,
     todo_ids: list[str],
     recurrence_defaults: dict,
+    current_user_id: str | None = None,
 ) -> None:
     """Background task: run LLM analysis with its own DB session.
 
@@ -726,7 +728,7 @@ async def _run_orchestration_analysis(
     try:
         async with async_session_factory() as db:
             event_status, error_msg = await _process_analysis(
-                db, orch_id, todo_ids, recurrence_defaults
+                db, orch_id, todo_ids, recurrence_defaults, current_user_id
             )
             await db.commit()
     except Exception as e:
@@ -756,10 +758,11 @@ def _launch_analysis(
     orch_id: str,
     todo_ids: list[str],
     recurrence_defaults: dict,
+    current_user_id: str | None = None,
 ) -> asyncio.Task:
     """Fire-and-forget the analysis background task."""
     task = asyncio.create_task(
-        _run_orchestration_analysis(orch_id, todo_ids, recurrence_defaults)
+        _run_orchestration_analysis(orch_id, todo_ids, recurrence_defaults, current_user_id)
     )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
@@ -876,7 +879,12 @@ async def submit_orchestration(
     # then run the potentially slow LLM analysis in a background task.
     await db.commit()
 
-    _launch_analysis(orch_id, payload.todo_ids, recurrence_defaults)
+    _launch_analysis(
+        orch_id,
+        payload.todo_ids,
+        recurrence_defaults,
+        current_user.id if hasattr(current_user, "id") else None,
+    )
 
     return {
         "code": 200,
@@ -1089,22 +1097,12 @@ async def modify_agent(
     selected_name = payload.get("recommended_name")
 
     if plan_type == "agent":
-        target = None
-        if recommended_id:
-            q = select(Agent).where(Agent.id == recommended_id)
-            if not getattr(current_user, "is_superuser", False):
-                q = q.where(Agent.creator_id == current_user.id)
-            target = (await db.execute(q)).scalar_one_or_none()
+        target = await db.get(Agent, recommended_id) if recommended_id else None
         if recommended_id and not target:
             raise HTTPException(status_code=404, detail="Agent 不存在")
         selected_name = selected_name or (target.name if target else "")
     elif plan_type in {"wagent", "new_wagent"}:
-        target = None
-        if recommended_id:
-            q = select(WAgent).where(WAgent.id == recommended_id)
-            if not getattr(current_user, "is_superuser", False):
-                q = q.where(WAgent.user_id == current_user.id)
-            target = (await db.execute(q)).scalar_one_or_none()
+        target = await db.get(WAgent, recommended_id) if recommended_id else None
         if recommended_id and not target:
             raise HTTPException(status_code=404, detail="W-Agent 不存在")
         selected_name = selected_name or (target.name if target else "")
@@ -1238,7 +1236,12 @@ async def retry_orchestration(
 
     await db.commit()
 
-    _launch_analysis(orch_id, todo_ids, _normalize_recurrence_payload(None))
+    _launch_analysis(
+        orch_id,
+        todo_ids,
+        _normalize_recurrence_payload(None),
+        orch.user_id,
+    )
 
     return {
         "code": 200,

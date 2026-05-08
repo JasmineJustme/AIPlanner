@@ -515,7 +515,7 @@ async def smart_discover_todos(
     current_user=Depends(get_current_user),
 ):
     try:
-        data = await todo_discovery_engine.smart_discover(db)
+        data = await todo_discovery_engine.smart_discover(db, getattr(current_user, "id", None))
         if not getattr(current_user, "is_superuser", False):
             data = {**data, "scope": "current_user"}
     except ValueError as e:

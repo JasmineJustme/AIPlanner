@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, not_, or_, select
+from sqlalchemy import and_, func, not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -34,9 +34,8 @@ async def list_messages(
     q = select(Message)
     count_q = select(func.count()).select_from(Message)
     if not getattr(current_user, "is_superuser", False):
-        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
-        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
-        count_q = count_q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+        q = q.where(Message.recipient_user_id == current_user.id)
+        count_q = count_q.where(Message.recipient_user_id == current_user.id)
     q = q.outerjoin(Todo, and_(Message.related_type == "todo", Message.related_id == Todo.id))
     count_q = count_q.outerjoin(Todo, and_(Message.related_type == "todo", Message.related_id == Todo.id))
     exclude_flow_completed = and_(
@@ -85,8 +84,7 @@ async def get_unread_count(
 ):
     q = select(func.count()).select_from(Message).where(Message.status == "unread")
     if not getattr(current_user, "is_superuser", False):
-        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
-        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+        q = q.where(Message.recipient_user_id == current_user.id)
     result = await db.execute(q)
     count = result.scalar() or 0
     return {"code": 200, "message": "success", "data": {"count": count}}
@@ -100,8 +98,7 @@ async def mark_read(
 ):
     q = select(Message).where(Message.id == message_id)
     if not getattr(current_user, "is_superuser", False):
-        todo_ids_q = select(Todo.id).where(or_(Todo.creator_id == current_user.id, Todo.original_owner_id == current_user.id, Todo.owner_id == current_user.id))
-        q = q.where(or_(Message.recipient_user_id == current_user.id, Message.related_type != "todo", Message.related_id.in_(todo_ids_q)))
+        q = q.where(Message.recipient_user_id == current_user.id)
     result = await db.execute(q)
     msg = result.scalar_one_or_none()
     if not msg:

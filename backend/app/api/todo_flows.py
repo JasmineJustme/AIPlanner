@@ -223,13 +223,13 @@ async def managed_flow_todos(
     q = (
         select(Todo)
         .where(
-            Todo.owner_id == current_user.id,
+            Todo.original_owner_id == current_user.id,
             Todo.last_flow_state.in_(active_states),
         )
         .order_by(Todo.updated_at.desc())
     )
     count_q = select(func.count()).select_from(Todo).where(
-        Todo.owner_id == current_user.id,
+        Todo.original_owner_id == current_user.id,
         Todo.last_flow_state.in_(active_states),
     )
     total = (await db.execute(count_q)).scalar() or 0

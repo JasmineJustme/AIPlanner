@@ -3,8 +3,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies.auth import get_current_user
-from app.models import Workflow, User
+from app.models import Workflow
 from app.schemas.workflow import WorkflowCreate, WorkflowUpdate, WorkflowResponse
 
 router = APIRouter(prefix="/config/workflows", tags=["config-workflows"])
@@ -15,19 +14,12 @@ async def list_workflows(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     offset = (page - 1) * size
-    count_result = await db.execute(
-        select(func.count()).select_from(Workflow).where(Workflow.user_id == current_user.id)
-    )
+    count_result = await db.execute(select(func.count()).select_from(Workflow))
     total = count_result.scalar() or 0
     result = await db.execute(
-        select(Workflow)
-        .where(Workflow.user_id == current_user.id)
-        .offset(offset)
-        .limit(size)
-        .order_by(Workflow.created_at.desc())
+        select(Workflow).offset(offset).limit(size).order_by(Workflow.created_at.desc())
     )
     items = result.scalars().all()
     pages = (total + size - 1) // size if total > 0 else 0
@@ -48,11 +40,8 @@ async def list_workflows(
 async def get_workflow(
     workflow_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Workflow).where(Workflow.id == workflow_id, Workflow.user_id == current_user.id)
-    )
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     workflow = result.scalar_one_or_none()
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -63,11 +52,9 @@ async def get_workflow(
 async def create_workflow(
     payload: WorkflowCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     data = payload.model_dump()
     workflow = Workflow(
-        user_id=current_user.id,
         name=data["name"],
         description=data.get("description"),
         capability_tags=data.get("capability_tags", []),
@@ -88,11 +75,8 @@ async def update_workflow(
     workflow_id: str,
     payload: WorkflowUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Workflow).where(Workflow.id == workflow_id, Workflow.user_id == current_user.id)
-    )
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     workflow = result.scalar_one_or_none()
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -108,11 +92,8 @@ async def update_workflow(
 async def delete_workflow(
     workflow_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Workflow).where(Workflow.id == workflow_id, Workflow.user_id == current_user.id)
-    )
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     workflow = result.scalar_one_or_none()
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -124,11 +105,8 @@ async def delete_workflow(
 async def toggle_workflow(
     workflow_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Workflow).where(Workflow.id == workflow_id, Workflow.user_id == current_user.id)
-    )
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     workflow = result.scalar_one_or_none()
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -142,14 +120,11 @@ async def toggle_workflow(
 async def test_workflow(
     workflow_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     import time
     from app.services.dify_client import dify_client
 
-    result = await db.execute(
-        select(Workflow).where(Workflow.id == workflow_id, Workflow.user_id == current_user.id)
-    )
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     workflow = result.scalar_one_or_none()
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")

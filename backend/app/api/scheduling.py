@@ -73,10 +73,11 @@ async def list_plans(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = select(SchedulePlan).order_by(SchedulePlan.created_at.desc())
-    if not getattr(current_user, "is_superuser", False):
-        q = q.where(SchedulePlan.user_id == current_user.id)
-    result = await db.execute(q)
+    result = await db.execute(
+        select(SchedulePlan)
+        .where(SchedulePlan.user_id == current_user.id)
+        .order_by(SchedulePlan.created_at.desc())
+    )
     items = result.scalars().all()
     data = [
         {
@@ -99,12 +100,11 @@ async def list_schedule_tasks(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = select(ScheduleTask).order_by(ScheduleTask.current_scheduled_at.desc())
-    if not getattr(current_user, "is_superuser", False):
-        q = q.where(
-            ScheduleTask.user_id == current_user.id,
-            ScheduleTask.orchestration_id.is_not(None),
-        )
+    q = (
+        select(ScheduleTask)
+        .where(ScheduleTask.user_id == current_user.id)
+        .order_by(ScheduleTask.current_scheduled_at.desc())
+    )
     if status:
         q = q.where(ScheduleTask.status == status)
     else:
@@ -161,12 +161,8 @@ async def list_schedule_tasks(
 async def get_task_detail(
     task_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    q = select(ScheduleTask).where(ScheduleTask.id == task_id)
-    if not getattr(current_user, "is_superuser", False):
-        q = q.where(ScheduleTask.user_id == current_user.id)
-    result = await db.execute(q)
+    result = await db.execute(select(ScheduleTask).where(ScheduleTask.id == task_id))
     t = result.scalar_one_or_none()
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -201,12 +197,8 @@ async def get_task_detail(
 async def pause_plan(
     plan_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    q = select(SchedulePlan).where(SchedulePlan.id == plan_id)
-    if not getattr(current_user, "is_superuser", False):
-        q = q.where(SchedulePlan.user_id == current_user.id)
-    plan = (await db.execute(q)).scalar_one_or_none()
+    plan = await db.get(SchedulePlan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     plan.status = "paused"
@@ -218,12 +210,8 @@ async def pause_plan(
 async def resume_plan(
     plan_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    q = select(SchedulePlan).where(SchedulePlan.id == plan_id)
-    if not getattr(current_user, "is_superuser", False):
-        q = q.where(SchedulePlan.user_id == current_user.id)
-    plan = (await db.execute(q)).scalar_one_or_none()
+    plan = await db.get(SchedulePlan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     plan.status = "active"
@@ -235,12 +223,8 @@ async def resume_plan(
 async def cancel_plan(
     plan_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    q = select(SchedulePlan).where(SchedulePlan.id == plan_id)
-    if not getattr(current_user, "is_superuser", False):
-        q = q.where(SchedulePlan.user_id == current_user.id)
-    plan = (await db.execute(q)).scalar_one_or_none()
+    plan = await db.get(SchedulePlan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
 
@@ -273,16 +257,12 @@ async def get_gantt_data(
     q = (
         select(ScheduleTask)
         .where(
+            ScheduleTask.user_id == current_user.id,
             ScheduleTask.status != "cancelled",
             or_(ScheduleTask.is_parent.is_(False), ScheduleTask.is_parent.is_(None)),
         )
         .order_by(ScheduleTask.current_scheduled_at)
     )
-    if not getattr(current_user, "is_superuser", False):
-        q = q.where(
-            ScheduleTask.user_id == current_user.id,
-            ScheduleTask.orchestration_id.is_not(None),
-        )
     if plan_id:
         q = q.where(ScheduleTask.plan_id == plan_id)
     result = await db.execute(q)

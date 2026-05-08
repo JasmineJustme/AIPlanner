@@ -10,7 +10,7 @@ from app.utils.timezone import utc_to_beijing_datetime
 router = APIRouter(prefix="/history", tags=["history"])
 
 
-def _history_scope_filter(current_user: User):
+async def _history_scope_filter(current_user: User):
     if getattr(current_user, "is_superuser", False):
         return None
     return ExecutionHistory.user_id == current_user.id
@@ -36,7 +36,7 @@ async def list_execution_history(
     offset = (page - 1) * size
     q = select(ExecutionHistory)
     count_q = select(func.count()).select_from(ExecutionHistory)
-    scope_filter = _history_scope_filter(current_user)
+    scope_filter = await _history_scope_filter(current_user)
     if scope_filter is not None:
         q = q.where(scope_filter)
         count_q = count_q.where(scope_filter)

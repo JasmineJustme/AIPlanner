@@ -208,10 +208,10 @@ export default function MessagesPage() {
     hoverReadTimers.current[timerKey] = setTimeout(() => {
       void handleMarkRead(record.id, false);
       delete hoverReadTimers.current[timerKey];
-    }, 500);
+    }, 200);
   };
 
-  const handleRowHoverLeave = (record: Message) => {
+  const handleRowHoverLeave = (record: Pick<Message, 'id'>) => {
     const timer = hoverReadTimers.current[record.id];
     if (timer) {
       clearTimeout(timer);
@@ -303,6 +303,12 @@ export default function MessagesPage() {
               loading={loading}
               columns={dispatchColumns}
               dataSource={dispatchData.items}
+              onRow={(record) => ({
+                onMouseEnter: () => {
+                  void handleRowHoverRead(record as Message);
+                },
+                onMouseLeave: () => handleRowHoverLeave(record as Pick<Message, 'id'>),
+              })}
               pagination={false}
               locale={{ emptyText: <Empty description="暂无派发消息" /> }}
             />
@@ -313,6 +319,12 @@ export default function MessagesPage() {
               loading={loading}
               columns={collabColumns}
               dataSource={collabData.items}
+              onRow={(record) => ({
+                onMouseEnter: () => {
+                  void handleRowHoverRead(record as Message);
+                },
+                onMouseLeave: () => handleRowHoverLeave(record as Pick<Message, 'id'>),
+              })}
               pagination={false}
               locale={{ emptyText: <Empty description="暂无协作请求" /> }}
             />

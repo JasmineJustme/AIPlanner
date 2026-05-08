@@ -10,7 +10,12 @@ from app.utils.timezone import to_utc_naive, utc_now_naive, utc_to_beijing_iso
 
 
 class Orchestrator:
-    async def orchestrate(self, db: AsyncSession, todo_ids: list[str]) -> dict:
+    async def orchestrate(
+        self,
+        db: AsyncSession,
+        todo_ids: list[str],
+        current_user_id: str | None = None,
+    ) -> dict:
         """Analyze todos and create orchestration plan using LLM"""
         # 1. Get todos
         result = await db.execute(select(Todo).where(Todo.id.in_(todo_ids)))
@@ -28,7 +33,12 @@ class Orchestrator:
 
         # 3. Get LLM config for orchestration
         from app.models.llm_config import LLMConfig
-        llm_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "orchestration"))
+        llm_result = await db.execute(
+            select(LLMConfig).where(
+                LLMConfig.purpose == "orchestration",
+                LLMConfig.user_id == current_user_id,
+            )
+        )
         llm_config = llm_result.scalar_one_or_none()
 
         if not llm_config:
@@ -76,7 +86,7 @@ class Orchestrator:
 JSON 必须包含以下字段：
 {{
   "plan_type": "agent | wagent | new_wagent",
-  "recommended_id": "推荐的 agent/wagent id，没有可留空字符串",
+  "recommended_id": "推荐的 agent id，没有可留空字符串",
   "recommended_name": "推荐名称",
   "reason": "推荐原因",
   "input_params": {{"参数名": "参数值"}},
@@ -95,13 +105,11 @@ JSON 必须包含以下字段：
 5. recommended_name 必须与 recommended_id 对应。
 """
         template = llm_config.prompt_template or ""
-        required_placeholders = ["{current_time}", "{todo_desc}", "{agent_desc}", "{wagent_desc}", "{workflow_desc}"]
+        required_placeholders = ["{current_time}", "{todo_desc}", "{agent_desc}"]
         prompt_context = {
             "current_time": current_time,
             "todo_desc": todo_desc,
             "agent_desc": agent_desc,
-            "wagent_desc": wagent_desc,
-            "workflow_desc": workflow_desc,
         }
         if all(token in template for token in required_placeholders):
             prompt = self._render_prompt_template(template, prompt_context)
@@ -113,7 +121,7 @@ JSON 必须包含以下字段：
             # logger.info("{}",llm_config.prompt_template)
             logger.info("Orchestration LLM prompt for todo_ids={}:\n{}", todo_ids, prompt)
             response = await llm_client.chat(llm_config, [
-                {"role": "system", "content": "你是一个智能任务编排助手，擅长为任务选择执行器并补全 workflow/agent 参数与调度时间。"},
+                {"role": "system", "content": "你是一个智能任务编排助手，擅长为任务选择执行器并补全 agent 参数与调度时间。"},
                 {"role": "user", "content": prompt}
             ])
             parsed_response = self._parse_plan_response(response.get("content", ""))

@@ -143,6 +143,13 @@ export default function AppLayout() {
   };
 
   useEffect(() => {
+    // 切换账号时先清零，避免短暂显示上一个用户的未读数
+    setUnreadCount(0);
+
+    if (!currentUser?.id) {
+      return;
+    }
+
     getUnreadCount()
       .then((res) => {
         const body = (res as { data: { data?: { count: number } } }).data;
@@ -151,17 +158,28 @@ export default function AppLayout() {
         setUnreadCount(count);
       })
       .catch(() => {});
-  }, [setUnreadCount]);
+  }, [currentUser?.id, setUnreadCount]);
 
   useEffect(() => {
-    const handler = () => incrementUnread();
+    const handler = () => {
+      // 通过后端真实值回填，避免本地自增与实际未读数漂移
+      getUnreadCount()
+        .then((res) => {
+          const body = (res as { data: { data?: { count: number } } }).data;
+          const payload = body?.data ?? body;
+          const count = (payload as { count?: number })?.count ?? 0;
+          setUnreadCount(count);
+        })
+        .catch(() => {});
+    };
+
     on('message', handler);
     MESSAGE_EVENT_TYPES.forEach((evt) => on(evt, handler));
     return () => {
       off('message', handler);
       MESSAGE_EVENT_TYPES.forEach((evt) => off(evt, handler));
     };
-  }, [on, off, incrementUnread]);
+  }, [on, off, setUnreadCount]);
 
   const userMenu = [
     {

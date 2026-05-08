@@ -237,8 +237,19 @@ class TodoDiscoveryEngine:
             return candidate_id
         return db_candidates_by_real_id.get(candidate_id)
 
-    async def _run_todo_dedup(self, db: AsyncSession, candidates: list[dict], dedup_at: datetime) -> dict:
-        cfg_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "todo_dedup"))
+    async def _run_todo_dedup(
+        self,
+        db: AsyncSession,
+        candidates: list[dict],
+        dedup_at: datetime,
+        current_user_id: str | None = None,
+    ) -> dict:
+        cfg_result = await db.execute(
+            select(LLMConfig).where(
+                LLMConfig.purpose == "todo_dedup",
+                LLMConfig.user_id == current_user_id,
+            )
+        )
         llm_cfg = cfg_result.scalar_one_or_none()
         if not llm_cfg:
             return {"removed_candidate_ids": set(), "touched_keep_candidate_ids": set(), "duplicates": []}
@@ -376,7 +387,7 @@ class TodoDiscoveryEngine:
             "duplicates": dedup_links,
         }
 
-    async def smart_discover(self, db: AsyncSession) -> dict:
+    async def smart_discover(self, db: AsyncSession, current_user_id: str | None = None) -> dict:
         # Always sync datasources first, then analyze synced context.
         synced_data = await sync_all_datasources(db)
 
@@ -392,7 +403,12 @@ class TodoDiscoveryEngine:
         todo_desc = await self._build_existing_todo_text(db)
         responsibility_lookup = await self._build_responsibility_lookup(db)
 
-        llm_result = await db.execute(select(LLMConfig).where(LLMConfig.purpose == "todo_analysis"))
+        llm_result = await db.execute(
+            select(LLMConfig).where(
+                LLMConfig.purpose == "todo_analysis",
+                LLMConfig.user_id == current_user_id,
+            )
+        )
         llm_cfg = llm_result.scalar_one_or_none()
         if not llm_cfg:
             raise ValueError("待办梳理 LLM 未配置")
@@ -459,6 +475,9 @@ class TodoDiscoveryEngine:
                     "priority": item.get("priority") or "medium",
                     "source": "system",
                     "execution_mode": item.get("execution_mode") or "system",
+                    "creator_id": current_user_id,
+                    "owner_id": current_user_id,
+                    "original_owner_id": current_user_id,
                     "due_date": item.get("due_date"),
                     "tags": item.get("tags") or [],
                     "responsibility_ids": responsibility_ids,
@@ -505,7 +524,7 @@ class TodoDiscoveryEngine:
                 }
             )
 
-        dedup_result = await self._run_todo_dedup(db, dedup_candidates, dedup_at)
+        dedup_result = await self._run_todo_dedup(db, dedup_candidates, dedup_at, current_user_id)
         removed_candidate_ids = set(dedup_result.get("removed_candidate_ids") or set())
         touched_keep_candidate_ids = set(dedup_result.get("touched_keep_candidate_ids") or set())
         dedup_links = dedup_result.get("duplicates") or []
