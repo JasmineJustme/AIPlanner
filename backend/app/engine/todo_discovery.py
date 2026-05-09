@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import DataSource, LLMConfig, Responsibility, Todo
 from app.services.datasource_sync import sync_all_datasources
 from app.services.llm_client import llm_client
+from app.services.message_service import create_todo_messages_for_users
 from app.utils.timezone import to_utc_naive, utc_now_naive, utc_to_beijing_iso
 
 
@@ -422,6 +423,7 @@ class TodoDiscoveryEngine:
             "现有待办:\n{todo_desc}\n\n"
             "仅返回 JSON，字段必须完整："
             "{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibility\":\"\",\"responsibilities\":[]}]}"
+            "。其中 confirm_by 为期望确认/截止时间（ISO8601），若无明确截止时间可填 null。"
         )
         prompt = self._render_prompt_template(
             self._sanitize_prompt_template(llm_cfg.prompt_template) or default_prompt,
@@ -436,6 +438,7 @@ class TodoDiscoveryEngine:
             prompt = (
                 f"{prompt}\n\n"
                 "仅返回 JSON：{\"todos\":[{\"todo_summary\":\"\",\"task_description\":\"\",\"priority\":\"high|medium|low\",\"urgency_reason\":\"\",\"start_recurring\":false,\"confirm_by\":null,\"executor\":\"user|system\",\"tags\":[],\"project\":\"\",\"responsibility\":\"\",\"responsibilities\":[]}]}"
+                "。其中 confirm_by 为期望确认/截止时间（ISO8601），若无明确截止时间可填 null。"
             )
 
         logger.info("Todo analysis LLM prompt:\n{}", prompt)
@@ -559,6 +562,17 @@ class TodoDiscoveryEngine:
         await db.flush()
         for todo in created_items:
             await db.refresh(todo)
+
+        for todo in created_items:
+            recipients = [todo.creator_id, todo.owner_id]
+            await create_todo_messages_for_users(
+                db,
+                type="review_new",
+                todo=todo,
+                recipient_user_ids=recipients,
+                sender_user_id=None,
+                title_override=f"新待审任务：{todo.title}",
+            )
 
         return {
             "synced_datasource_count": len(enabled_ds),

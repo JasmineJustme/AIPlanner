@@ -114,10 +114,34 @@ async def auto_discover_tick() -> None:
             _auto_discover_running = False
 
 
+async def deadline_reminder_tick() -> None:
+    """Called every minute; executes overdue todo reminder scanner by settings."""
+    from app.database import async_session_factory
+    from app.engine.deadline_reminder import scan_and_send_deadline_reminders
+
+    async with async_session_factory() as db:
+        try:
+            enabled = bool(await _get_system_setting(db, "deadline_reminder_enabled", True))
+            if not enabled:
+                return
+            result = await scan_and_send_deadline_reminders(db)
+            await db.commit()
+            logger.info(
+                "Deadline reminder tick completed: scanned={}, sent={}, skipped={}",
+                result.get("scanned", 0),
+                result.get("sent", 0),
+                result.get("skipped", 0),
+            )
+        except Exception as e:
+            logger.error(f"Deadline reminder tick error: {e}")
+            await db.rollback()
+
+
 def start_scheduler() -> None:
     scheduler.add_job(scheduler_tick, "interval", minutes=1, id="scheduler_tick")
     scheduler.add_job(sync_tick, "interval", hours=1, id="sync_tick")
     scheduler.add_job(auto_discover_tick, "interval", minutes=1, id="auto_discover_tick")
+    scheduler.add_job(deadline_reminder_tick, "interval", minutes=1, id="deadline_reminder_tick")
     scheduler.start()
     logger.info("APScheduler started")
 

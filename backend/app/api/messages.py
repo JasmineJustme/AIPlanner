@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, not_, select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -17,6 +17,16 @@ class BatchMessageIdsBody(BaseModel):
 
 
 router = APIRouter(prefix="/messages", tags=["messages"])
+
+SYSTEM_MESSAGE_TYPES = [
+    "review_new",
+    "orchestration_confirm",
+    "task_confirm",
+    "task_completed",
+    "task_failed",
+    "deadline_reminder",
+    "system",
+]
 
 
 @router.get("")
@@ -41,10 +51,12 @@ async def list_messages(
     exclude_flow_completed = and_(
         Message.type == "task_completed",
         Message.related_type == "todo",
-        Todo.last_flow_type.in_(["dispatch", "collaboration", "collaboration_accept"]),
+        func.coalesce(Todo.last_flow_type, "").in_(["dispatch", "collaboration", "collaboration_accept"]),
     )
     q = q.where(not_(exclude_flow_completed))
     count_q = count_q.where(not_(exclude_flow_completed))
+    q = q.where(Message.type.in_(SYSTEM_MESSAGE_TYPES))
+    count_q = count_q.where(Message.type.in_(SYSTEM_MESSAGE_TYPES))
     if status:
         q = q.where(Message.status == status)
         count_q = count_q.where(Message.status == status)

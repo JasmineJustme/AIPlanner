@@ -52,16 +52,6 @@ const SYSTEM_MESSAGE_TYPE_LABEL_MAP: Record<string, string> = {
   collaboration_request: '协作请求',
 };
 
-const SYSTEM_MESSAGE_TYPES = new Set([
-  'review_new',
-  'orchestration_confirm',
-  'task_confirm',
-  'task_completed',
-  'task_failed',
-  'deadline_reminder',
-  'system',
-]);
-
 const STATUS_OPTIONS = [
   { value: 'unread', label: '未读' },
   { value: 'read', label: '已读' },
@@ -122,14 +112,7 @@ export default function MessagesPage() {
         const body = (res as { data: { data?: typeof data } }).data;
         const payload = body?.data ?? body;
         if (payload && typeof payload === 'object' && 'items' in payload) {
-          const items = ((payload as { items: Message[] }).items ?? [])
-            .filter((item) => SYSTEM_MESSAGE_TYPES.has(item.type))
-            .map((item) => ({
-              ...item,
-              type: item.type === 'dispatch_message' || item.type === 'collaboration_request'
-                ? item.type
-                : item.type,
-            }));
+          const items = (payload as { items: Message[] }).items ?? [];
           setData((prev) => ({ ...prev, items, total: (payload as { total: number }).total, pages: (payload as { pages: number }).pages }));
         }
       } else if (tabKey === 'dispatch') {

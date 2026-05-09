@@ -357,12 +357,15 @@ async def ensure_schedule_for_orchestration(
 
     if schedule_plan is None:
         schedule_plan = SchedulePlan(
+            user_id=orch.user_id,
             name=orch.summary or f"编排任务 {orch_id}",
             status="active",
             is_recurring=False,
         )
         db.add(schedule_plan)
         await db.flush()
+    elif not schedule_plan.user_id and orch.user_id:
+        schedule_plan.user_id = orch.user_id
 
     recommended_id = plan_data.get("recommended_id")
     plan_type = plan_data.get("plan_type")
@@ -379,6 +382,7 @@ async def ensure_schedule_for_orchestration(
     if recurrence["is_recurring"]:
         if parent_task is None:
             parent_task = ScheduleTask(
+                user_id=orch.user_id,
                 plan_id=schedule_plan.id,
                 parent_task_id=None,
                 is_parent=True,
@@ -398,6 +402,7 @@ async def ensure_schedule_for_orchestration(
             )
             db.add(parent_task)
         else:
+            parent_task.user_id = orch.user_id
             parent_task.plan_id = schedule_plan.id
             parent_task.parent_task_id = None
             parent_task.is_parent = True
@@ -420,6 +425,7 @@ async def ensure_schedule_for_orchestration(
         # non-recurring orchestration -> direct executable task (not parent)
         if parent_task is None:
             parent_task = ScheduleTask(
+                user_id=orch.user_id,
                 plan_id=schedule_plan.id,
                 parent_task_id=None,
                 is_parent=False,
@@ -439,6 +445,7 @@ async def ensure_schedule_for_orchestration(
             )
             db.add(parent_task)
         else:
+            parent_task.user_id = orch.user_id
             parent_task.plan_id = schedule_plan.id
             parent_task.parent_task_id = None
             parent_task.is_parent = False

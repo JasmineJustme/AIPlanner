@@ -11,6 +11,7 @@ from app.dependencies.auth import get_current_user
 from app.engine.todo_discovery import todo_discovery_engine
 from app.models import Message, Todo, ScheduleTask, TodoFlowLog
 from app.services.llm_client import LLMServiceError
+from app.services.todo_status_service import set_todo_status
 from app.utils.timezone import to_utc_naive, utc_now_naive
 from pydantic import BaseModel
 from app.schemas.todo import TodoCreate, TodoUpdate, TodoResponse, TodoReviewConfirm
@@ -166,7 +167,17 @@ async def _reconcile_orchestration_todo_statuses(db: AsyncSession) -> None:
         status_before = todo.status
         next_status = map_orchestration_status_to_todo_status(orch.status)
         if todo.status != next_status:
-            todo.status = next_status
+            if next_status in {"completed", "failed"}:
+                await set_todo_status(
+                    db,
+                    todo=todo,
+                    new_status=next_status,
+                    operator_user_id=todo.owner_id,
+                    reason=f"orchestration status={orch.status}",
+                )
+            else:
+                todo.status = next_status
+                await db.flush()
             changed = True
         if next_status == "completed":
             completed_at = latest_completion_by_orch.get(todo.orchestration_id or "")
@@ -329,8 +340,12 @@ async def complete_todo(
         raise HTTPException(status_code=400, detail="仅待确认的用户执行任务支持手动完成")
 
     status_before = todo.status
-    todo.status = "completed"
-    todo.completed_at = utc_now_naive()
+    await set_todo_status(
+        db,
+        todo=todo,
+        new_status="completed",
+        operator_user_id=getattr(current_user, "id", None),
+    )
     todo.orchestration_id = None
     await _sync_origin_flow_completion(db, todo, getattr(current_user, "id", None), status_before=status_before)
     await db.flush()
@@ -387,6 +402,12 @@ async def rerun_todo(
     todo = await _get_todo_or_404(todo_id, db, current_user)
     if todo.status != "completed":
         raise HTTPException(status_code=400, detail="仅已完成任务支持重新执行")
+    if todo.source in {"dispatched", "collaboration"}:
+        raise HTTPException(status_code=400, detail="派发或协作任务不可重新执行")
+
+    creator_id = todo.creator_id or getattr(current_user, "id", None)
+    owner_id = todo.owner_id or getattr(current_user, "id", None)
+    original_owner_id = todo.original_owner_id or creator_id or owner_id
 
     new_todo = Todo(
         title=todo.title,
@@ -394,8 +415,12 @@ async def rerun_todo(
         status="pending_confirm",
         priority=todo.priority,
         source=todo.source,
+        creator_id=creator_id,
+        owner_id=owner_id,
+        original_owner_id=original_owner_id,
         execution_mode=todo.execution_mode,
         source_ref=todo.source_ref,
+        duplicate_of=todo.id,
         due_date=todo.due_date,
         tags=list(todo.tags or []),
         responsibility_ids=list(todo.responsibility_ids or []),

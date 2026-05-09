@@ -819,7 +819,7 @@ function OrchestrationCard({
       </Collapse>
 
       <Modal
-        title="选择 Agent / W-Agent"
+        title="选择 Agent"
         open={agentModalOpen}
         onCancel={() => setAgentModalOpen(false)}
         footer={null}

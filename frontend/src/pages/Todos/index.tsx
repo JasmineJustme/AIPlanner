@@ -49,6 +49,7 @@ import {
   TODO_EXECUTION_MODE_MAP,
   TODO_STATUS_MAP,
   TodoExecutionMode,
+  TodoSource,
   TodoStatus,
 } from '@/constants/status';
 
@@ -162,6 +163,7 @@ export default function TodosPage() {
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [deletingIds, setDeletingIds] = useState<Record<string, boolean>>({});
   const [discovering, setDiscovering] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   const requestSeqRef = useRef(0);
@@ -438,12 +440,23 @@ export default function TodosPage() {
   };
 
   const handleDelete = async (id: string) => {
+    setDeletingIds((prev) => ({ ...prev, [id]: true }));
     try {
       await deleteTodo(id);
+      setData((current) => ({
+        ...current,
+        items: current.items.filter((item) => item.id !== id),
+        total: Math.max(0, current.total - 1),
+      }));
       message.success('已删除');
-      loadTodos();
     } catch {
       message.error('删除失败');
+    } finally {
+      setDeletingIds((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     }
   };
 
@@ -565,6 +578,8 @@ export default function TodosPage() {
   const isCompleted = (record: Todo) => record.status === TodoStatus.Completed;
   const isSystemProcessing = (record: Todo) =>
     record.status === TodoStatus.Orchestrating || record.status === TodoStatus.Scheduling;
+  const isRerunBlockedSource = (record: Todo) =>
+    record.source === TodoSource.Dispatched || record.source === TodoSource.Collaboration;
 
   const renderDeleteAction = (record: Todo, disabled = false) => {
     if (disabled) {
@@ -703,20 +718,31 @@ export default function TodosPage() {
         const pendingLike = isPendingLike(record);
         const completed = isCompleted(record);
         const systemProcessing = isSystemProcessing(record);
+        const isDeleting = !!deletingIds[record.id];
 
         if (completed) {
+          const rerunBlocked = isRerunBlockedSource(record);
+          const rerunButton = (
+            <Button
+              type="primary"
+              size="small"
+              icon={<RedoOutlined />}
+              onClick={() => handleRerunTask(record)}
+              loading={submitting === record.id}
+              disabled={rerunBlocked || isDeleting}
+            >
+              重新执行
+            </Button>
+          );
+
           return (
             <Space>
-              <Button
-                type="primary"
-                size="small"
-                icon={<RedoOutlined />}
-                onClick={() => handleRerunTask(record)}
-                loading={submitting === record.id}
-              >
-                重新执行
-              </Button>
-              {renderDeleteAction(record)}
+              {rerunBlocked ? (
+                <Tooltip title="派发或协作任务不可重新执行">
+                  <span>{rerunButton}</span>
+                </Tooltip>
+              ) : rerunButton}
+              {renderDeleteAction(record, isDeleting)}
             </Space>
           );
         }
@@ -730,6 +756,7 @@ export default function TodosPage() {
                   size="small"
                   onClick={() => handleUserConfirmTask(record)}
                   loading={submitting === record.id}
+                  disabled={isDeleting}
                 >
                   确认
                 </Button>
@@ -737,10 +764,11 @@ export default function TodosPage() {
                   type="link"
                   size="small"
                   onClick={() => openEditDrawer(record)}
+                  disabled={isDeleting}
                 >
                   编辑
                 </Button>
-                {renderDeleteAction(record)}
+                {renderDeleteAction(record, isDeleting)}
               </Space>
             );
           }
@@ -753,6 +781,7 @@ export default function TodosPage() {
                   size="small"
                   onClick={() => handleCompleteTask(record)}
                   loading={submitting === record.id}
+                  disabled={isDeleting}
                 >
                   完成
                 </Button>
@@ -760,6 +789,7 @@ export default function TodosPage() {
                   size="small"
                   onClick={() => handleUserCancelTask(record)}
                   loading={submitting === record.id}
+                  disabled={isDeleting}
                 >
                   取消
                 </Button>
@@ -806,7 +836,7 @@ export default function TodosPage() {
               size="small"
               onClick={() => handleConfirmTask(record)}
               loading={submitting === record.id}
-              disabled={!pendingLike}
+              disabled={!pendingLike || isDeleting}
             >
               确认
             </Button>
@@ -814,11 +844,11 @@ export default function TodosPage() {
               type="link"
               size="small"
               onClick={() => openEditDrawer(record)}
-              disabled={!pendingLike}
+              disabled={!pendingLike || isDeleting}
             >
               编辑
             </Button>
-            {renderDeleteAction(record, !pendingLike)}
+            {renderDeleteAction(record, !pendingLike || isDeleting)}
           </Space>
         );
       },

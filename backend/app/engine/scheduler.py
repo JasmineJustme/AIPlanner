@@ -4,7 +4,9 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import Todo
 from app.models.schedule import SchedulePlan, ScheduleTask
+from app.services.message_service import create_todo_messages_for_users
 from app.utils.recurrence import get_next_run_time
 from app.models.settings import SystemSetting
 from app.engine.executor import executor
@@ -225,6 +227,24 @@ class SchedulerEngine:
             task.status = "failed"
             if task.completed_at is None:
                 task.completed_at = _now_local_naive()
+
+            todo = None
+            if task.orchestration_id:
+                todo = (
+                    await db.execute(
+                        select(Todo).where(Todo.orchestration_id == task.orchestration_id)
+                    )
+                ).scalars().first()
+
+            if todo:
+                await create_todo_messages_for_users(
+                    db,
+                    type="task_failed",
+                    todo=todo,
+                    recipient_user_ids=[todo.owner_id],
+                    sender_user_id=None,
+                    content_override=f"任务运行失败：{todo.title}；task_id={task.id}；error={task.error_message or 'unknown'}",
+                )
 
         await db.flush()
         await sse_manager.broadcast("task.status_changed", {"task_id": task.id, "status": task.status})

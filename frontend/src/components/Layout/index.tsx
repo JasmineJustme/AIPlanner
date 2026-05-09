@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Layout, Menu, Badge, Avatar, Dropdown, Button, Segmented } from 'antd';
 import ConfirmModal from '@/components/ConfirmModal';
 import { useConfirmModal } from '@/hooks/useConfirmModal';
@@ -104,7 +104,7 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { siderCollapsed, toggleSider } = useGlobalStore();
-  const { unreadCount, setUnreadCount, incrementUnread } = useNotificationStore();
+  const { unreadCount, setUnreadCount } = useNotificationStore();
   const { on, off } = useSSE();
   const confirmModal = useConfirmModal();
   const currentUser = useAuthStore((s) => s.currentUser);
@@ -142,14 +142,7 @@ export default function AppLayout() {
     navigate('/login', { replace: true });
   };
 
-  useEffect(() => {
-    // 切换账号时先清零，避免短暂显示上一个用户的未读数
-    setUnreadCount(0);
-
-    if (!currentUser?.id) {
-      return;
-    }
-
+  const syncUnreadCount = useCallback(() => {
     getUnreadCount()
       .then((res) => {
         const body = (res as { data: { data?: { count: number } } }).data;
@@ -158,19 +151,23 @@ export default function AppLayout() {
         setUnreadCount(count);
       })
       .catch(() => {});
-  }, [currentUser?.id, setUnreadCount]);
+  }, [setUnreadCount]);
+
+  useEffect(() => {
+    // 切换账号时先清零，避免短暂显示上一个用户的未读数
+    setUnreadCount(0);
+
+    if (!currentUser?.id) {
+      return;
+    }
+
+    syncUnreadCount();
+  }, [currentUser?.id, setUnreadCount, syncUnreadCount]);
 
   useEffect(() => {
     const handler = () => {
       // 通过后端真实值回填，避免本地自增与实际未读数漂移
-      getUnreadCount()
-        .then((res) => {
-          const body = (res as { data: { data?: { count: number } } }).data;
-          const payload = body?.data ?? body;
-          const count = (payload as { count?: number })?.count ?? 0;
-          setUnreadCount(count);
-        })
-        .catch(() => {});
+      syncUnreadCount();
     };
 
     on('message', handler);
@@ -179,7 +176,7 @@ export default function AppLayout() {
       off('message', handler);
       MESSAGE_EVENT_TYPES.forEach((evt) => off(evt, handler));
     };
-  }, [on, off, setUnreadCount]);
+  }, [on, off, syncUnreadCount]);
 
   const userMenu = [
     {

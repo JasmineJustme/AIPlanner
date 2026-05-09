@@ -78,6 +78,7 @@ class Executor:
             agent.success_count += 1
 
             history = ExecutionHistory(
+                user_id=task.user_id,
                 task_id=task.id, agent_id=agent.id, agent_name=agent.name,
                 status="completed", input_params=task.input_params,
                 output_result=result, execution_log=execution_log, duration_ms=duration_ms,
@@ -146,6 +147,7 @@ class Executor:
             wagent.success_count += 1
 
             history = ExecutionHistory(
+                user_id=task.user_id,
                 task_id=task.id, wagent_id=wagent.id, agent_name=wagent.name,
                 status="completed", input_params=task.input_params,
                 output_result=step_outputs, execution_log=execution_log, duration_ms=duration_ms,
@@ -188,9 +190,7 @@ class Executor:
         completed_at = _now_local_naive()
         duration_ms = int((completed_at - started_at).total_seconds() * 1000)
 
-        task.status = "failed"
         task.error_message = error
-        task.completed_at = completed_at
         task.execution_log = self._build_execution_log(
             task=task,
             target_type="agent" if task.agent_id else "wagent" if task.wagent_id else "unknown",
@@ -212,6 +212,7 @@ class Executor:
             agent_name = wagent.name
 
         history = ExecutionHistory(
+            user_id=task.user_id,
             task_id=task.id,
             agent_id=task.agent_id,
             wagent_id=task.wagent_id,
